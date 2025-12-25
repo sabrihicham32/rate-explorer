@@ -1,1 +1,4 @@
 project_id = "tlpoidtopayrzuyccyjm"
+
+[functions.scrape-rates]
+verify_jwt = false
