@@ -41,31 +41,31 @@ export const RATE_INDICES: RateIndex[] = [
     id: "estr3m_long",
     name: "3-Month ESTR (Long)",
     currency: "EUR",
-    description: "Euro Short-Term Rate - 3 Month (Long Dated)"
+    description: "Euro Short-Term Rate - 3 Month (Long Dated 2030+)"
   },
   {
-    id: "tonar",
-    name: "TONAR",
+    id: "tona3m",
+    name: "3-Month TONA",
     currency: "JPY",
-    description: "Tokyo Overnight Average Rate"
+    description: "Tokyo Overnight Average Rate - 3 Month"
   },
   {
-    id: "euroyen",
-    name: "Euroyen TIBOR",
-    currency: "JPY",
-    description: "Euroyen Tokyo Interbank Offered Rate"
+    id: "saron3m",
+    name: "3-Month SARON",
+    currency: "CHF",
+    description: "Swiss Average Rate Overnight - 3 Month"
   },
   {
-    id: "ruonia",
-    name: "RUONIA",
-    currency: "RUB",
-    description: "Ruble Overnight Index Average"
+    id: "corra3m",
+    name: "CORRA 3-Month",
+    currency: "CAD",
+    description: "Canadian Overnight Repo Rate Average - 3 Month"
   },
   {
-    id: "kofr",
-    name: "KOFR",
-    currency: "KRW",
-    description: "Korea Overnight Financing Repo Rate"
+    id: "sora3m",
+    name: "3M SORA Futures",
+    currency: "SGD",
+    description: "Singapore Overnight Rate Average - 3 Month"
   }
 ];
 
