@@ -13,10 +13,11 @@ const RATE_INDICES = {
     currency: "EUR",
     baseSymbol: "IM",
     maturities: [
-      "F26", "G26", "H26", "J26", "K26", "M26", "U26", "Z26",
+      "F26", "G26", "H26", "J26", "K26", "M26", "N26", "Q26", "U26", "V26", "X26", "Z26",
       "H27", "M27", "U27", "Z27",
       "H28", "M28", "U28", "Z28",
-      "H29", "M29", "U29", "Z29"
+      "H29", "M29", "U29", "Z29",
+      "H30", "M30", "U30", "Z30"
     ]
   },
   sofr: {
@@ -27,7 +28,8 @@ const RATE_INDICES = {
       "V25", "X25", "Z25",
       "F26", "G26", "H26", "J26", "K26", "M26", "N26", "Q26", "U26", "V26", "X26", "Z26",
       "H27", "M27", "U27", "Z27",
-      "H28", "M28", "U28", "Z28"
+      "H28", "M28", "U28", "Z28",
+      "H29", "M29", "U29", "Z29"
     ]
   },
   sonia: {
@@ -36,9 +38,10 @@ const RATE_INDICES = {
     baseSymbol: "J8",
     maturities: [
       "Z25",
-      "H26", "M26", "U26", "Z26",
+      "F26", "G26", "H26", "J26", "K26", "M26", "N26", "Q26", "U26", "V26", "X26", "Z26",
       "H27", "M27", "U27", "Z27",
-      "H28", "M28", "U28", "Z28"
+      "H28", "M28", "U28", "Z28",
+      "H29", "M29", "U29", "Z29"
     ]
   },
   estr3m: {
@@ -49,7 +52,9 @@ const RATE_INDICES = {
       "V25", "X25", "Z25",
       "F26", "G26", "H26", "J26", "K26", "M26", "N26", "Q26", "U26", "V26", "X26", "Z26",
       "H27", "M27", "U27", "Z27",
-      "H28", "M28"
+      "H28", "M28", "U28", "Z28",
+      "H29", "M29", "U29", "Z29",
+      "H30", "M30"
     ]
   },
   estr1m: {
@@ -59,6 +64,61 @@ const RATE_INDICES = {
     maturities: [
       "V25", "X25", "Z25",
       "F26", "G26", "H26", "J26", "K26", "M26", "N26", "Q26", "U26", "V26", "X26", "Z26",
+      "H27", "M27", "U27", "Z27",
+      "H28", "M28", "U28", "Z28"
+    ]
+  },
+  // New indices
+  estr3m_long: {
+    name: "3-Month ESTR (Long)",
+    currency: "EUR",
+    baseSymbol: "RA",
+    baseContract: "RAH30",
+    maturities: [
+      "H30", "M30", "U30", "Z30",
+      "H31", "M31", "U31", "Z31",
+      "H32", "M32", "U32", "Z32"
+    ]
+  },
+  tonar: {
+    name: "TONAR (JPY)",
+    currency: "JPY",
+    baseSymbol: "T0",
+    maturities: [
+      "Z25",
+      "F26", "G26", "H26", "J26", "K26", "M26", "N26", "Q26", "U26", "V26", "X26", "Z26",
+      "H27", "M27", "U27", "Z27",
+      "H28", "M28", "U28", "Z28"
+    ]
+  },
+  euroyen: {
+    name: "Euroyen TIBOR",
+    currency: "JPY",
+    baseSymbol: "J2",
+    maturities: [
+      "Z25",
+      "H26", "M26", "U26", "Z26",
+      "H27", "M27", "U27", "Z27",
+      "H28", "M28", "U28", "Z28"
+    ]
+  },
+  ruonia: {
+    name: "RUONIA",
+    currency: "RUB",
+    baseSymbol: "RG",
+    maturities: [
+      "Z25",
+      "F26", "G26", "H26", "J26", "K26", "M26", "U26", "Z26",
+      "H27", "M27", "U27", "Z27"
+    ]
+  },
+  kofr: {
+    name: "KOFR (KRW)",
+    currency: "KRW",
+    baseSymbol: "KUA",
+    maturities: [
+      "Z25",
+      "F26", "G26", "H26", "J26", "K26", "M26", "U26", "Z26",
       "H27", "M27", "U27", "Z27"
     ]
   }
@@ -91,13 +151,14 @@ interface FuturesData {
 async function scrapeRateData(
   apiKey: string,
   baseSymbol: string,
-  maturities: string[]
+  maturities: string[],
+  baseContract?: string
 ): Promise<FuturesData[]> {
   const results: FuturesData[] = [];
 
-  // Scrape main page with all contracts
-  const firstSymbol = baseSymbol + maturities[0];
-  const url = `https://www.barchart.com/futures/quotes/${firstSymbol}/futures-prices`;
+  // Use base contract if provided, otherwise construct from first maturity
+  const symbol = baseContract || baseSymbol + maturities[0];
+  const url = `https://www.barchart.com/futures/quotes/${symbol}/futures-prices`;
 
   console.log(`Scraping: ${url}`);
 
@@ -111,8 +172,8 @@ async function scrapeRateData(
       body: JSON.stringify({
         url,
         formats: ["markdown"],
-        onlyMainContent: true,
-        waitFor: 2000,
+        onlyMainContent: false, // Get full page content
+        waitFor: 3000, // Wait longer for all data to load
       }),
     });
 
@@ -123,57 +184,112 @@ async function scrapeRateData(
 
     const data = await response.json();
     const markdown = data.data?.markdown || data.markdown || "";
+    
+    console.log(`Markdown length: ${markdown.length}`);
 
-    // Parse the markdown table
+    // Parse the markdown table - look for all table rows
     const lines = markdown.split("\n");
     let inTable = false;
+    let headerFound = false;
 
     for (const line of lines) {
-      if (line.includes("Contract") && line.includes("Latest")) {
+      // Look for table header with Contract
+      if (line.includes("Contract") && (line.includes("Last") || line.includes("Latest"))) {
         inTable = true;
+        headerFound = true;
         continue;
       }
 
-      if (inTable && line.startsWith("|")) {
-        // Skip separator lines
-        if (line.includes("---")) continue;
+      // Skip separator lines
+      if (line.includes("---") && line.includes("|")) {
+        continue;
+      }
 
+      // Process table rows
+      if (inTable && line.includes("|")) {
         const cells = line.split("|").map((c: string) => c.trim()).filter((c: string) => c);
         
-        if (cells.length >= 7) {
-          // Extract contract code from the first cell
-          const contractMatch = cells[0].match(/([A-Z]{2,3}[A-Z]\d{2})/);
-          if (contractMatch) {
-            const contract = contractMatch[1];
-            const maturityMatch = cells[0].match(/\((.*?)\)/);
-            const maturity = maturityMatch ? maturityMatch[1] : parseMaturity(contract.slice(-3));
-            
-            // Parse change value
-            let changeText = cells[2].replace(/[+\s]/g, "");
-            let changeValue = 0;
-            
-            if (changeText.toLowerCase() === "unch") {
-              changeValue = 0;
-              changeText = "unch";
-            } else {
-              changeValue = parseFloat(changeText) || 0;
+        if (cells.length >= 6) {
+          // Extract contract code - look for pattern like IMF26, SQV25, etc.
+          const contractPatterns = [
+            /\b([A-Z]{2,4}[FGHJKMNQUVXZ]\d{2})\b/,  // Standard pattern
+            /\[([A-Z]{2,4}[FGHJKMNQUVXZ]\d{2})\]/,  // In brackets
+          ];
+          
+          let contract = "";
+          for (const pattern of contractPatterns) {
+            const match = cells[0].match(pattern);
+            if (match) {
+              contract = match[1];
+              break;
             }
+          }
+          
+          if (!contract) continue;
 
+          // Parse maturity from contract code
+          const maturityCode = contract.slice(-3);
+          const maturity = parseMaturity(maturityCode);
+          
+          // Find the relevant cells - handle different table formats
+          let latest = "";
+          let change = "";
+          let changeValue = 0;
+          let open = "";
+          let high = "";
+          let low = "";
+          let previous = "";
+
+          // Try to extract data based on cell count and content
+          if (cells.length >= 7) {
+            // Standard format: Contract | Last | Change | Open | High | Low | Prev
+            latest = cells[1].replace(/[s\*]/g, "").trim();
+            change = cells[2].replace(/[+\s\*]/g, "").trim();
+            open = cells[3].replace(/[s\*]/g, "").trim();
+            high = cells[4].replace(/[s\*]/g, "").trim();
+            low = cells[5].replace(/[s\*]/g, "").trim();
+            previous = cells[6].replace(/[s\*]/g, "").trim();
+          } else if (cells.length >= 6) {
+            latest = cells[1].replace(/[s\*]/g, "").trim();
+            change = cells[2].replace(/[+\s\*]/g, "").trim();
+            open = cells[3].replace(/[s\*]/g, "").trim();
+            high = cells[4].replace(/[s\*]/g, "").trim();
+            low = cells[5].replace(/[s\*]/g, "").trim();
+            previous = cells.length > 6 ? cells[6].replace(/[s\*]/g, "").trim() : latest;
+          }
+
+          // Parse change value
+          if (change.toLowerCase() === "unch" || change === "0" || change === "") {
+            changeValue = 0;
+            change = "unch";
+          } else {
+            changeValue = parseFloat(change) || 0;
+          }
+
+          // Only add if we have valid price data
+          if (latest && !isNaN(parseFloat(latest))) {
             results.push({
               contract,
               maturity,
-              latest: cells[1].replace(/s$/, ""),
-              change: changeText,
+              latest,
+              change: changeValue === 0 ? "unch" : change,
               changeValue,
-              open: cells[3],
-              high: cells[4],
-              low: cells[5],
-              previous: cells[6],
+              open: open || latest,
+              high: high || latest,
+              low: low || latest,
+              previous: previous || latest,
             });
           }
         }
       }
+
+      // Stop if we hit another section
+      if (headerFound && line.startsWith("#") && !line.includes("Price")) {
+        break;
+      }
     }
+
+    console.log(`Extracted ${results.length} contracts`);
   } catch (error) {
     console.error(`Error scraping ${baseSymbol}:`, error);
   }
@@ -182,7 +298,17 @@ async function scrapeRateData(
 }
 
 function generateDemoData(baseSymbol: string, maturities: string[]): FuturesData[] {
-  const basePrice = baseSymbol === "SQ" ? 95.5 : baseSymbol === "J8" ? 95.2 : 97.8;
+  let basePrice: number;
+  
+  switch (baseSymbol) {
+    case "SQ": basePrice = 95.5; break;
+    case "J8": basePrice = 95.2; break;
+    case "T0": basePrice = 99.95; break;
+    case "J2": basePrice = 99.8; break;
+    case "RG": basePrice = 85.0; break;
+    case "KUA": basePrice = 96.5; break;
+    default: basePrice = 97.8;
+  }
   
   return maturities.map((mat, i) => {
     const price = basePrice + (Math.random() - 0.5) * 0.3 - i * 0.02;
@@ -233,11 +359,17 @@ Deno.serve(async (req) => {
     const rateConfig = RATE_INDICES[index as keyof typeof RATE_INDICES];
     console.log(`Fetching ${rateConfig.name} data...`);
 
-    let data = await scrapeRateData(apiKey, rateConfig.baseSymbol, rateConfig.maturities);
+    let data = await scrapeRateData(
+      apiKey, 
+      rateConfig.baseSymbol, 
+      rateConfig.maturities,
+      (rateConfig as any).baseContract
+    );
 
     // If no data scraped, use demo data
     if (data.length === 0) {
-      data = generateDemoData(rateConfig.baseSymbol, rateConfig.maturities.slice(0, 12));
+      console.log("No data scraped, using demo data");
+      data = generateDemoData(rateConfig.baseSymbol, rateConfig.maturities);
     }
 
     return new Response(
