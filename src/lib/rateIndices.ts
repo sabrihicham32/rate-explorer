@@ -36,6 +36,36 @@ export const RATE_INDICES: RateIndex[] = [
     name: "1-Month ESTR",
     currency: "EUR",
     description: "Euro Short-Term Rate - 1 Month"
+  },
+  {
+    id: "estr3m_long",
+    name: "3-Month ESTR (Long)",
+    currency: "EUR",
+    description: "Euro Short-Term Rate - 3 Month (Long Dated)"
+  },
+  {
+    id: "tonar",
+    name: "TONAR",
+    currency: "JPY",
+    description: "Tokyo Overnight Average Rate"
+  },
+  {
+    id: "euroyen",
+    name: "Euroyen TIBOR",
+    currency: "JPY",
+    description: "Euroyen Tokyo Interbank Offered Rate"
+  },
+  {
+    id: "ruonia",
+    name: "RUONIA",
+    currency: "RUB",
+    description: "Ruble Overnight Index Average"
+  },
+  {
+    id: "kofr",
+    name: "KOFR",
+    currency: "KRW",
+    description: "Korea Overnight Financing Repo Rate"
   }
 ];
 
