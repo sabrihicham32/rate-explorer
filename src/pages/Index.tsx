@@ -1,23 +1,42 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useRateData } from "@/hooks/useRateData";
-import { RATE_INDICES } from "@/lib/rateIndices";
+import { RATE_INDICES, FuturesData } from "@/lib/rateIndices";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import { RateCard } from "@/components/RateCard";
-import { RateTable } from "@/components/RateTable";
+import { EditableRateTable } from "@/components/EditableRateTable";
+import { RateCurveChart } from "@/components/RateCurveChart";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, LineChart, Table } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const Index = () => {
   const [selectedIndex, setSelectedIndex] = useState(RATE_INDICES[0].id);
+  const [localData, setLocalData] = useState<FuturesData[] | null>(null);
+  const [activeTab, setActiveTab] = useState<"table" | "chart">("table");
   const queryClient = useQueryClient();
   
   const { data: rateData, isLoading, isFetching, error } = useRateData(selectedIndex);
 
   const handleRefresh = () => {
+    setLocalData(null); // Reset local edits on refresh
     queryClient.invalidateQueries({ queryKey: ["rateData", selectedIndex] });
   };
 
+  const handleDataChange = useCallback((newData: FuturesData[]) => {
+    setLocalData(newData);
+  }, []);
+
+  // Use local data if edited, otherwise use fetched data
+  const displayData = localData || rateData?.data || [];
+
   const selectedRate = RATE_INDICES.find((r) => r.id === selectedIndex);
+
+  // Reset local data when index changes
+  const handleIndexChange = (id: string) => {
+    setLocalData(null);
+    setSelectedIndex(id);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -44,30 +63,44 @@ const Index = () => {
                 key={rate.id}
                 rate={rate}
                 isSelected={selectedIndex === rate.id}
-                onClick={() => setSelectedIndex(rate.id)}
+                onClick={() => handleIndexChange(rate.id)}
                 isLoading={selectedIndex === rate.id && isFetching}
               />
             ))}
           </div>
         </section>
 
-        {/* Data Table */}
+        {/* Data Section with Tabs */}
         <section className="bg-card rounded-lg border border-border overflow-hidden shadow-lg">
           <div className="p-4 border-b border-border bg-secondary/20">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-4">
               <div>
                 <h2 className="text-lg font-semibold text-foreground">
                   {selectedRate?.name}
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  Futures prices for all maturities
+                  Futures prices and rate curve • Taux Effectif = 100% - Latest
                 </p>
               </div>
-              {rateData?.data && (
-                <span className="text-sm text-muted-foreground">
-                  {rateData.data.length} contracts
-                </span>
-              )}
+              <div className="flex items-center gap-4">
+                {displayData.length > 0 && (
+                  <span className="text-sm text-muted-foreground">
+                    {displayData.length} contracts
+                  </span>
+                )}
+                <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "table" | "chart")}>
+                  <TabsList className="grid grid-cols-2 w-[200px]">
+                    <TabsTrigger value="table" className="flex items-center gap-2">
+                      <Table className="w-4 h-4" />
+                      Tableau
+                    </TabsTrigger>
+                    <TabsTrigger value="chart" className="flex items-center gap-2">
+                      <LineChart className="w-4 h-4" />
+                      Courbe
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </div>
             </div>
           </div>
 
@@ -78,16 +111,28 @@ const Index = () => {
               <p className="text-sm">{rateData?.error || "Please try again later"}</p>
             </div>
           ) : (
-            <RateTable
-              data={rateData?.data || []}
-              isLoading={isLoading}
-            />
+            <>
+              {activeTab === "table" ? (
+                <EditableRateTable
+                  data={displayData}
+                  isLoading={isLoading}
+                  onDataChange={handleDataChange}
+                />
+              ) : (
+                <div className="p-4">
+                  <RateCurveChart data={displayData} showEffectiveRate={true} />
+                </div>
+              )}
+            </>
           )}
         </section>
 
         {/* Footer */}
         <footer className="mt-8 text-center text-sm text-muted-foreground">
           <p>Data sourced from Barchart. Prices may be delayed.</p>
+          <p className="mt-1 text-xs">
+            Pour le bootstrapping de courbes et pricing de dérivés : les données peuvent être modifiées localement.
+          </p>
         </footer>
       </main>
     </div>
