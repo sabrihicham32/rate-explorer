@@ -6,8 +6,9 @@ import { RateCard } from "@/components/RateCard";
 import { EditableRateTable } from "@/components/EditableRateTable";
 import { RateCurveChart } from "@/components/RateCurveChart";
 import { IRSDashboard } from "@/components/IRSDashboard";
+import { BootstrappingDashboard } from "@/components/BootstrappingDashboard";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, LineChart, Table, ArrowLeftRight } from "lucide-react";
+import { AlertCircle, LineChart, Table, ArrowLeftRight, Calculator } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -15,7 +16,7 @@ const Index = () => {
   const [selectedIndex, setSelectedIndex] = useState(RATE_INDICES[0].id);
   const [localData, setLocalData] = useState<FuturesData[] | null>(null);
   const [activeTab, setActiveTab] = useState<"table" | "chart">("table");
-  const [mainView, setMainView] = useState<"futures" | "irs">("futures");
+  const [mainView, setMainView] = useState<"futures" | "irs" | "bootstrap">("futures");
   const queryClient = useQueryClient();
   
   const { data: rateData, isLoading, isFetching, error } = useRateData(selectedIndex);
@@ -56,8 +57,8 @@ const Index = () => {
       <main className="container mx-auto px-4 py-6">
         {/* Main View Selector */}
         <div className="mb-6">
-          <Tabs value={mainView} onValueChange={(v) => setMainView(v as "futures" | "irs")}>
-            <TabsList className="grid grid-cols-2 w-[300px]">
+          <Tabs value={mainView} onValueChange={(v) => setMainView(v as "futures" | "irs" | "bootstrap")}>
+            <TabsList className="grid grid-cols-3 w-[450px]">
               <TabsTrigger value="futures" className="flex items-center gap-2">
                 <LineChart className="w-4 h-4" />
                 Rate Futures
@@ -65,6 +66,10 @@ const Index = () => {
               <TabsTrigger value="irs" className="flex items-center gap-2">
                 <ArrowLeftRight className="w-4 h-4" />
                 IRS Swaps
+              </TabsTrigger>
+              <TabsTrigger value="bootstrap" className="flex items-center gap-2">
+                <Calculator className="w-4 h-4" />
+                Bootstrapping
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -147,8 +152,10 @@ const Index = () => {
               )}
             </section>
           </>
-        ) : (
+        ) : mainView === "irs" ? (
           <IRSDashboard />
+        ) : (
+          <BootstrappingDashboard />
         )}
 
         {/* Footer */}
