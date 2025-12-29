@@ -2,3 +2,6 @@ project_id = "tlpoidtopayrzuyccyjm"
 
 [functions.scrape-rates]
 verify_jwt = false
+
+[functions.scrape-irs]
+verify_jwt = false
