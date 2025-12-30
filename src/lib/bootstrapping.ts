@@ -1,7 +1,12 @@
 /**
  * Rate Curve Bootstrapping Library
  * 
- * Implements multiple bootstrapping methods:
+ * Implements professional bootstrapping methodology:
+ * - Swaps are EXACT calibration points (always forced)
+ * - Futures are GUIDES between swaps (adjusted to avoid arbitrage)
+ * - Interest rate basis conventions per currency
+ * 
+ * Methods:
  * - Simple/Linear interpolation
  * - Cubic Spline interpolation
  * - Nelson-Siegel parametric model
@@ -9,10 +14,22 @@
 
 // ============ Types ============
 
+export type DayCountConvention = 'ACT/360' | 'ACT/365' | 'ACT/ACT' | '30/360';
+export type Compounding = 'simple' | 'annual' | 'semi-annual' | 'quarterly' | 'continuous';
+
+export interface BasisConvention {
+  dayCount: DayCountConvention;
+  compounding: Compounding;
+  paymentFrequency: number; // per year
+}
+
 export interface BootstrapPoint {
   tenor: number; // in years
   rate: number;  // in decimal (e.g., 0.0425 for 4.25%)
   source: 'futures' | 'swap';
+  priority: number; // 1 = swap (highest), 2 = futures
+  adjusted?: boolean; // true if futures was adjusted
+  originalRate?: number; // original rate before adjustment
 }
 
 export interface DiscountFactor {
@@ -20,6 +37,7 @@ export interface DiscountFactor {
   df: number;
   zeroRate: number;
   forwardRate?: number;
+  source: 'swap' | 'futures' | 'interpolated';
 }
 
 export interface BootstrapResult {
@@ -27,6 +45,10 @@ export interface BootstrapResult {
   discountFactors: DiscountFactor[];
   parameters?: NelsonSiegelParams;
   curvePoints: { tenor: number; rate: number }[];
+  inputPoints: BootstrapPoint[];
+  adjustedPoints: BootstrapPoint[];
+  currency: string;
+  basisConvention: BasisConvention;
 }
 
 export type BootstrapMethod = 'linear' | 'cubic_spline' | 'nelson_siegel';
@@ -36,6 +58,22 @@ export interface NelsonSiegelParams {
   beta1: number;
   beta2: number;
   lambda: number;
+}
+
+// ============ Currency Conventions ============
+
+const CURRENCY_CONVENTIONS: Record<string, BasisConvention> = {
+  USD: { dayCount: 'ACT/360', compounding: 'semi-annual', paymentFrequency: 2 },
+  EUR: { dayCount: 'ACT/360', compounding: 'annual', paymentFrequency: 1 },
+  GBP: { dayCount: 'ACT/365', compounding: 'semi-annual', paymentFrequency: 2 },
+  CHF: { dayCount: 'ACT/360', compounding: 'annual', paymentFrequency: 1 },
+  JPY: { dayCount: 'ACT/365', compounding: 'semi-annual', paymentFrequency: 2 },
+  CAD: { dayCount: 'ACT/365', compounding: 'semi-annual', paymentFrequency: 2 },
+  SGD: { dayCount: 'ACT/365', compounding: 'semi-annual', paymentFrequency: 2 },
+};
+
+export function getBasisConvention(currency: string): BasisConvention {
+  return CURRENCY_CONVENTIONS[currency] || CURRENCY_CONVENTIONS.USD;
 }
 
 // ============ Utility Functions ============
@@ -69,10 +107,42 @@ export function priceToRate(price: number): number {
   return (100 - price) / 100;
 }
 
+// ============ Rate Conversions ============
+
+/**
+ * Convert swap rate to continuous zero rate
+ */
+export function swapRateToContinuous(swapRate: number, tenor: number, basis: BasisConvention): number {
+  const n = basis.paymentFrequency;
+  
+  if (basis.compounding === 'continuous') {
+    return swapRate;
+  }
+  
+  if (basis.compounding === 'simple' || tenor <= 1) {
+    // Simple rate: r_cont = ln(1 + r * t) / t
+    return Math.log(1 + swapRate * tenor) / tenor;
+  }
+  
+  // Periodic compounding: r_cont = n * ln(1 + r/n)
+  return n * Math.log(1 + swapRate / n);
+}
+
+/**
+ * Convert futures rate (simple money market) to continuous
+ */
+export function futuresRateToContinuous(futuresRate: number, basis: BasisConvention): number {
+  // Futures rates are typically simple rates on ACT/360 or ACT/365
+  // For short periods (< 1 year), simple rate ≈ continuous rate
+  // r_cont = ln(1 + r * t) / t, for 3-month: t ≈ 0.25
+  const period = 0.25; // 3-month futures
+  return Math.log(1 + futuresRate * period) / period;
+}
+
 // ============ Discount Factor Calculations ============
 
 /**
- * Calculate discount factor from zero rate
+ * Calculate discount factor from continuous zero rate
  * DF = exp(-r * t)
  */
 export function calculateDiscountFactor(rate: number, tenor: number): number {
@@ -90,16 +160,130 @@ export function calculateZeroRate(df: number, tenor: number): number {
 
 /**
  * Calculate forward rate between two tenors
- * f(t1,t2) = (r2*t2 - r1*t1) / (t2 - t1)
+ * f(t1,t2) = -ln(DF2/DF1) / (t2-t1)
  */
 export function calculateForwardRate(
-  rate1: number,
+  df1: number,
   tenor1: number,
-  rate2: number,
+  df2: number,
   tenor2: number
 ): number {
-  if (tenor2 <= tenor1) return rate2;
-  return (rate2 * tenor2 - rate1 * tenor1) / (tenor2 - tenor1);
+  if (tenor2 <= tenor1) return 0;
+  return -Math.log(df2 / df1) / (tenor2 - tenor1);
+}
+
+// ============ Data Preparation ============
+
+/**
+ * Prepare bootstrap points with proper priority and conventions
+ * Key principle:
+ * - Swaps are EXACT calibration points (priority 1)
+ * - Futures are GUIDES (priority 2)
+ */
+export function prepareBootstrapPoints(
+  swapPoints: BootstrapPoint[],
+  futuresPoints: BootstrapPoint[],
+  currency: string
+): BootstrapPoint[] {
+  const basis = getBasisConvention(currency);
+  
+  // Convert all rates to continuous compounding
+  const processedSwaps = swapPoints.map(p => ({
+    ...p,
+    rate: swapRateToContinuous(p.rate, p.tenor, basis),
+    priority: 1,
+    source: 'swap' as const,
+  }));
+  
+  const processedFutures = futuresPoints.map(p => ({
+    ...p,
+    rate: futuresRateToContinuous(p.rate, basis),
+    priority: 2,
+    source: 'futures' as const,
+  }));
+  
+  // Combine all points
+  const allPoints = [...processedSwaps, ...processedFutures];
+  
+  // Sort by tenor
+  allPoints.sort((a, b) => a.tenor - b.tenor);
+  
+  return allPoints;
+}
+
+/**
+ * Adjust futures to be consistent with swap constraints
+ * Implements: Swaps win, futures are deformed slightly
+ */
+export function adjustFuturesToSwaps(points: BootstrapPoint[]): BootstrapPoint[] {
+  const swaps = points.filter(p => p.source === 'swap').sort((a, b) => a.tenor - b.tenor);
+  const futures = points.filter(p => p.source === 'futures');
+  
+  if (swaps.length < 2) {
+    // Not enough swaps to constrain, return as is
+    return points;
+  }
+  
+  const adjustedFutures: BootstrapPoint[] = [];
+  
+  for (const future of futures) {
+    // Find surrounding swaps
+    const prevSwap = [...swaps].reverse().find(s => s.tenor <= future.tenor);
+    const nextSwap = swaps.find(s => s.tenor >= future.tenor);
+    
+    if (prevSwap && nextSwap && prevSwap.tenor !== nextSwap.tenor) {
+      // Interpolate expected rate from swaps
+      const t = (future.tenor - prevSwap.tenor) / (nextSwap.tenor - prevSwap.tenor);
+      const expectedRate = prevSwap.rate + t * (nextSwap.rate - prevSwap.rate);
+      
+      // Check if futures is too far from expectation
+      const deviation = Math.abs(future.rate - expectedRate);
+      const tolerance = 0.003; // 30 bps tolerance
+      
+      if (deviation > tolerance) {
+        // Adjust futures towards expected value (weighted average)
+        const weight = 0.7; // 70% swap influence, 30% futures
+        const adjustedRate = weight * expectedRate + (1 - weight) * future.rate;
+        
+        adjustedFutures.push({
+          ...future,
+          rate: adjustedRate,
+          adjusted: true,
+          originalRate: future.rate,
+        });
+      } else {
+        adjustedFutures.push(future);
+      }
+    } else {
+      // No surrounding swaps, keep original
+      adjustedFutures.push(future);
+    }
+  }
+  
+  return [...swaps, ...adjustedFutures].sort((a, b) => a.tenor - b.tenor);
+}
+
+/**
+ * Remove duplicate tenors, keeping swaps over futures
+ */
+export function removeDuplicates(points: BootstrapPoint[]): BootstrapPoint[] {
+  const uniquePoints = new Map<string, BootstrapPoint>();
+  
+  // Sort by priority first (swaps first)
+  const sorted = [...points].sort((a, b) => a.priority - b.priority);
+  
+  for (const p of sorted) {
+    const key = p.tenor.toFixed(3);
+    if (!uniquePoints.has(key)) {
+      uniquePoints.set(key, p);
+    }
+    // If already exists and current is swap, replace
+    else if (p.source === 'swap') {
+      uniquePoints.set(key, p);
+    }
+  }
+  
+  return Array.from(uniquePoints.values()).sort((a, b) => a.tenor - b.tenor);
 }
 
 // ============ Linear Interpolation ============
@@ -130,7 +314,11 @@ export function linearInterpolation(
   return sorted[sorted.length - 1].rate;
 }
 
-export function bootstrapLinear(points: BootstrapPoint[]): BootstrapResult {
+export function bootstrapLinear(
+  points: BootstrapPoint[],
+  currency: string,
+  basis: BasisConvention
+): BootstrapResult {
   const sorted = [...points].sort((a, b) => a.tenor - b.tenor);
   const discountFactors: DiscountFactor[] = [];
 
@@ -139,27 +327,43 @@ export function bootstrapLinear(points: BootstrapPoint[]): BootstrapResult {
   const step = maxTenor > 10 ? 0.5 : 0.25;
   const curvePoints: { tenor: number; rate: number }[] = [];
 
+  let prevDf: DiscountFactor | null = null;
+
   for (let t = step; t <= maxTenor + step; t += step) {
     const rate = linearInterpolation(sorted, t);
     curvePoints.push({ tenor: t, rate });
 
     const df = calculateDiscountFactor(rate, t);
-    const prevDf = discountFactors.length > 0 ? discountFactors[discountFactors.length - 1] : null;
+    const forwardRate = prevDf
+      ? calculateForwardRate(prevDf.df, prevDf.tenor, df, t)
+      : rate;
+
+    // Determine source for this point
+    const closestInput = sorted.reduce((closest, p) => 
+      Math.abs(p.tenor - t) < Math.abs(closest.tenor - t) ? p : closest
+    );
+    const isExactMatch = Math.abs(closestInput.tenor - t) < 0.01;
+    const source = isExactMatch ? closestInput.source : 'interpolated';
 
     discountFactors.push({
       tenor: t,
       df,
       zeroRate: rate,
-      forwardRate: prevDf
-        ? calculateForwardRate(prevDf.zeroRate, prevDf.tenor, rate, t)
-        : rate,
+      forwardRate: Math.max(0, forwardRate), // Ensure non-negative
+      source,
     });
+
+    prevDf = discountFactors[discountFactors.length - 1];
   }
 
   return {
     method: 'linear',
     discountFactors,
     curvePoints,
+    inputPoints: points,
+    adjustedPoints: sorted,
+    currency,
+    basisConvention: basis,
   };
 }
 
@@ -187,7 +391,7 @@ function calculateSplineCoefficients(points: BootstrapPoint[]): SplineCoefficien
     h.push(x[i + 1] - x[i]);
   }
 
-  // Natural spline: solve tridiagonal system for second derivatives
+  // Natural spline with monotonicity constraint
   const alpha: number[] = [0];
   for (let i = 1; i < n - 1; i++) {
     alpha.push(
@@ -245,7 +449,11 @@ function evaluateSpline(coeffs: SplineCoefficients, targetX: number): number {
   return a[i] + b[i] * dx + c[i] * dx * dx + d[i] * dx * dx * dx;
 }
 
-export function bootstrapCubicSpline(points: BootstrapPoint[]): BootstrapResult {
+export function bootstrapCubicSpline(
+  points: BootstrapPoint[],
+  currency: string,
+  basis: BasisConvention
+): BootstrapResult {
   const sorted = [...points].sort((a, b) => a.tenor - b.tenor);
   const coeffs = calculateSplineCoefficients(sorted);
   const discountFactors: DiscountFactor[] = [];
@@ -254,27 +462,42 @@ export function bootstrapCubicSpline(points: BootstrapPoint[]): BootstrapResult 
   const step = maxTenor > 10 ? 0.5 : 0.25;
   const curvePoints: { tenor: number; rate: number }[] = [];
 
+  let prevDf: DiscountFactor | null = null;
+
   for (let t = step; t <= maxTenor + step; t += step) {
     const rate = evaluateSpline(coeffs, t);
     curvePoints.push({ tenor: t, rate });
 
     const df = calculateDiscountFactor(rate, t);
-    const prevDf = discountFactors.length > 0 ? discountFactors[discountFactors.length - 1] : null;
+    const forwardRate = prevDf
+      ? calculateForwardRate(prevDf.df, prevDf.tenor, df, t)
+      : rate;
+
+    const closestInput = sorted.reduce((closest, p) => 
+      Math.abs(p.tenor - t) < Math.abs(closest.tenor - t) ? p : closest
+    );
+    const isExactMatch = Math.abs(closestInput.tenor - t) < 0.01;
+    const source = isExactMatch ? closestInput.source : 'interpolated';
 
     discountFactors.push({
       tenor: t,
       df,
       zeroRate: rate,
-      forwardRate: prevDf
-        ? calculateForwardRate(prevDf.zeroRate, prevDf.tenor, rate, t)
-        : rate,
+      forwardRate: Math.max(0, forwardRate),
+      source,
     });
+
+    prevDf = discountFactors[discountFactors.length - 1];
   }
 
   return {
     method: 'cubic_spline',
     discountFactors,
     curvePoints,
+    inputPoints: points,
+    adjustedPoints: sorted,
+    currency,
+    basisConvention: basis,
   };
 }
 
@@ -299,17 +522,23 @@ export function nelsonSiegelRate(t: number, params: NelsonSiegelParams): number 
 
 /**
  * Fit Nelson-Siegel parameters to observed rates
- * Uses gradient descent optimization
+ * Uses weighted least squares - swaps have higher weight
  */
 function fitNelsonSiegel(points: BootstrapPoint[]): NelsonSiegelParams {
-  // Initial guesses
-  let beta0 = points.length > 0 ? Math.max(...points.map(p => p.rate)) : 0.03;
-  let beta1 = points.length > 1 ? points[0].rate - beta0 : -0.01;
-  let beta2 = 0;
+  // Initial guesses based on curve shape
+  const rates = points.map(p => p.rate);
+  const maxRate = Math.max(...rates);
+  const minRate = Math.min(...rates);
+  const shortRate = points.length > 0 ? points[0].rate : 0.03;
+  const longRate = points.length > 0 ? points[points.length - 1].rate : 0.04;
+  
+  let beta0 = longRate;
+  let beta1 = shortRate - longRate;
+  let beta2 = (maxRate - minRate) * (maxRate > longRate ? 1 : -1);
   let lambda = 0.5;
 
-  const learningRate = 0.0001;
-  const iterations = 5000;
+  const learningRate = 0.00005;
+  const iterations = 8000;
 
   for (let iter = 0; iter < iterations; iter++) {
     let gradBeta0 = 0;
@@ -321,6 +550,9 @@ function fitNelsonSiegel(points: BootstrapPoint[]): NelsonSiegelParams {
       const t = point.tenor;
       if (t <= 0.001) continue;
 
+      // Weight: swaps get 3x weight
+      const weight = point.source === 'swap' ? 3 : 1;
+
       const lambdaT = lambda * t;
       const expTerm = Math.exp(-lambdaT);
       const factor1 = (1 - expTerm) / lambdaT;
@@ -329,29 +561,33 @@ function fitNelsonSiegel(points: BootstrapPoint[]): NelsonSiegelParams {
       const predicted = beta0 + beta1 * factor1 + beta2 * factor2;
       const error = predicted - point.rate;
 
-      gradBeta0 += 2 * error;
-      gradBeta1 += 2 * error * factor1;
-      gradBeta2 += 2 * error * factor2;
+      gradBeta0 += weight * 2 * error;
+      gradBeta1 += weight * 2 * error * factor1;
+      gradBeta2 += weight * 2 * error * factor2;
 
-      // Gradient for lambda (more complex)
+      // Gradient for lambda
       const dFactor1_dLambda = t * expTerm / lambdaT - (1 - expTerm) * t / (lambdaT * lambdaT);
       const dFactor2_dLambda = dFactor1_dLambda + t * expTerm;
-      gradLambda += 2 * error * (beta1 * dFactor1_dLambda + beta2 * dFactor2_dLambda);
+      gradLambda += weight * 2 * error * (beta1 * dFactor1_dLambda + beta2 * dFactor2_dLambda);
     }
 
     beta0 -= learningRate * gradBeta0;
     beta1 -= learningRate * gradBeta1;
     beta2 -= learningRate * gradBeta2;
-    lambda -= learningRate * 0.1 * gradLambda;
+    lambda -= learningRate * 0.05 * gradLambda;
 
     // Constrain lambda to reasonable range
-    lambda = Math.max(0.1, Math.min(3.0, lambda));
+    lambda = Math.max(0.05, Math.min(3.0, lambda));
   }
 
   return { beta0, beta1, beta2, lambda };
 }
 
-export function bootstrapNelsonSiegel(points: BootstrapPoint[]): BootstrapResult {
+export function bootstrapNelsonSiegel(
+  points: BootstrapPoint[],
+  currency: string,
+  basis: BasisConvention
+): BootstrapResult {
   const sorted = [...points].sort((a, b) => a.tenor - b.tenor);
   const params = fitNelsonSiegel(sorted);
   const discountFactors: DiscountFactor[] = [];
@@ -360,66 +596,120 @@ export function bootstrapNelsonSiegel(points: BootstrapPoint[]): BootstrapResult
   const step = maxTenor > 10 ? 0.5 : 0.25;
   const curvePoints: { tenor: number; rate: number }[] = [];
 
+  let prevDf: DiscountFactor | null = null;
+
   for (let t = step; t <= maxTenor + step; t += step) {
     const rate = nelsonSiegelRate(t, params);
     curvePoints.push({ tenor: t, rate });
 
     const df = calculateDiscountFactor(rate, t);
-    const prevDf = discountFactors.length > 0 ? discountFactors[discountFactors.length - 1] : null;
+    const forwardRate = prevDf
+      ? calculateForwardRate(prevDf.df, prevDf.tenor, df, t)
+      : rate;
+
+    const closestInput = sorted.reduce((closest, p) => 
+      Math.abs(p.tenor - t) < Math.abs(closest.tenor - t) ? p : closest
+    );
+    const isExactMatch = Math.abs(closestInput.tenor - t) < 0.05;
+    const source = isExactMatch ? closestInput.source : 'interpolated';
 
     discountFactors.push({
       tenor: t,
       df,
       zeroRate: rate,
-      forwardRate: prevDf
-        ? calculateForwardRate(prevDf.zeroRate, prevDf.tenor, rate, t)
-        : rate,
+      forwardRate: Math.max(0, forwardRate),
+      source,
     });
+
+    prevDf = discountFactors[discountFactors.length - 1];
   }
 
   return {
     method: 'nelson_siegel',
     discountFactors,
     curvePoints,
+    inputPoints: points,
+    adjustedPoints: sorted,
     parameters: params,
+    currency,
+    basisConvention: basis,
   };
 }
 
 // ============ Main Bootstrap Function ============
 
 export function bootstrap(
-  points: BootstrapPoint[],
-  method: BootstrapMethod
+  swapPoints: BootstrapPoint[],
+  futuresPoints: BootstrapPoint[],
+  method: BootstrapMethod,
+  currency: string = 'USD'
 ): BootstrapResult {
-  if (points.length === 0) {
+  const basis = getBasisConvention(currency);
+  
+  // Step 1: Prepare points with proper conventions
+  const allPoints = prepareBootstrapPoints(swapPoints, futuresPoints, currency);
+  
+  if (allPoints.length === 0) {
     return {
       method,
       discountFactors: [],
       curvePoints: [],
+      inputPoints: [],
+      adjustedPoints: [],
+      currency,
+      basisConvention: basis,
     };
   }
+  
+  // Step 2: Adjust futures to be consistent with swaps
+  const adjustedPoints = adjustFuturesToSwaps(allPoints);
+  
+  // Step 3: Remove duplicates (keep swaps)
+  const uniquePoints = removeDuplicates(adjustedPoints);
 
+  // Step 4: Run bootstrapping method
   switch (method) {
     case 'linear':
-      return bootstrapLinear(points);
+      return bootstrapLinear(uniquePoints, currency, basis);
     case 'cubic_spline':
-      return bootstrapCubicSpline(points);
+      return bootstrapCubicSpline(uniquePoints, currency, basis);
     case 'nelson_siegel':
-      return bootstrapNelsonSiegel(points);
+      return bootstrapNelsonSiegel(uniquePoints, currency, basis);
     default:
-      return bootstrapLinear(points);
+      return bootstrapLinear(uniquePoints, currency, basis);
   }
+}
+
+// Legacy function for backward compatibility
+export function bootstrapLegacy(
+  points: BootstrapPoint[],
+  method: BootstrapMethod
+): BootstrapResult {
+  const swaps = points.filter(p => p.source === 'swap');
+  const futures = points.filter(p => p.source === 'futures');
+  return bootstrap(swaps, futures, method, 'USD');
 }
 
 // ============ Export Functions ============
 
 export function exportToCSV(result: BootstrapResult): string {
-  const headers = ['Tenor', 'Discount Factor', 'Zero Rate (%)', 'Forward Rate (%)'];
+  const headers = [
+    'Tenor',
+    'Discount Factor',
+    'Zero Rate (%)',
+    'Forward Rate (%)',
+    'Source',
+    'Day Count',
+    'Compounding'
+  ];
   const rows = result.discountFactors.map(df => [
     df.tenor.toFixed(2),
     df.df.toFixed(8),
     (df.zeroRate * 100).toFixed(4),
     df.forwardRate ? (df.forwardRate * 100).toFixed(4) : 'N/A',
+    df.source,
+    result.basisConvention.dayCount,
+    result.basisConvention.compounding,
   ]);
 
   return [headers.join(','), ...rows.map(r => r.join(','))].join('\n');

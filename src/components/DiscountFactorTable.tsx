@@ -1,5 +1,6 @@
 import { DiscountFactor } from "@/lib/bootstrapping";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
 
 interface DiscountFactorTableProps {
   discountFactors: DiscountFactor[];
@@ -17,7 +18,7 @@ export function DiscountFactorTable({ discountFactors }: DiscountFactorTableProp
   return (
     <ScrollArea className="h-[400px]">
       <table className="w-full text-sm">
-        <thead className="sticky top-0 bg-card">
+        <thead className="sticky top-0 bg-card z-10">
           <tr className="border-b border-border">
             <th className="py-3 px-4 text-left font-medium text-muted-foreground">
               Tenor (Y)
@@ -30,6 +31,9 @@ export function DiscountFactorTable({ discountFactors }: DiscountFactorTableProp
             </th>
             <th className="py-3 px-4 text-right font-medium text-muted-foreground">
               Forward Rate (%)
+            </th>
+            <th className="py-3 px-4 text-center font-medium text-muted-foreground">
+              Source
             </th>
           </tr>
         </thead>
@@ -50,6 +54,24 @@ export function DiscountFactorTable({ discountFactors }: DiscountFactorTableProp
               </td>
               <td className="py-2 px-4 text-right font-mono text-foreground">
                 {df.forwardRate ? `${(df.forwardRate * 100).toFixed(4)}%` : "—"}
+              </td>
+              <td className="py-2 px-4 text-center">
+                <Badge 
+                  variant={
+                    df.source === 'swap' 
+                      ? 'default' 
+                      : df.source === 'futures' 
+                        ? 'secondary' 
+                        : 'outline'
+                  }
+                  className="text-xs"
+                >
+                  {df.source === 'swap' 
+                    ? 'Swap' 
+                    : df.source === 'futures' 
+                      ? 'Futures' 
+                      : 'Interp.'}
+                </Badge>
               </td>
             </tr>
           ))}

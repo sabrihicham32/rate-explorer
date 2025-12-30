@@ -6,7 +6,6 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 import {
-  LineChart,
   Line,
   XAxis,
   YAxis,
@@ -58,12 +57,16 @@ export function BootstrapCurveChart({ results, inputPoints }: BootstrapCurveChar
         }
       });
 
-      // Add input point if exists
+      // Add input points - separate swaps and futures
       const inputPoint = inputPoints.find(
         (p) => Math.abs(p.tenor - tenor) < 0.01
       );
       if (inputPoint) {
-        point.input = inputPoint.rate * 100;
+        if (inputPoint.source === 'swap') {
+          point.swapInput = inputPoint.rate * 100;
+        } else {
+          point.futuresInput = inputPoint.rate * 100;
+        }
         point.source = inputPoint.source;
       }
 
@@ -79,9 +82,13 @@ export function BootstrapCurveChart({ results, inputPoints }: BootstrapCurveChar
         color: METHOD_COLORS[result.method] || "hsl(var(--primary))",
       };
     });
-    config.input = {
-      label: "Données observées",
-      color: "hsl(var(--foreground))",
+    config.swapInput = {
+      label: "Swaps (Calibration)",
+      color: "hsl(142, 76%, 36%)",
+    };
+    config.futuresInput = {
+      label: "Futures (Guides)",
+      color: "hsl(var(--primary))",
     };
     return config;
   }, [results]);
@@ -104,88 +111,135 @@ export function BootstrapCurveChart({ results, inputPoints }: BootstrapCurveChar
   const maxRate = Math.ceil(Math.max(...allRates) * 10) / 10 + 0.2;
 
   return (
-    <ChartContainer config={chartConfig} className="h-[400px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-          <CartesianGrid
-            strokeDasharray="3 3"
-            stroke="hsl(var(--border))"
-            opacity={0.5}
-          />
-          <XAxis
-            dataKey="tenor"
-            tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-            tickLine={{ stroke: "hsl(var(--border))" }}
-            axisLine={{ stroke: "hsl(var(--border))" }}
-            tickFormatter={(value) => `${value}Y`}
-            label={{
-              value: "Maturité (années)",
-              position: "insideBottom",
-              offset: -10,
-              style: { fill: "hsl(var(--muted-foreground))", fontSize: 12 },
-            }}
-          />
-          <YAxis
-            domain={[minRate, maxRate]}
-            tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-            tickLine={{ stroke: "hsl(var(--border))" }}
-            axisLine={{ stroke: "hsl(var(--border))" }}
-            tickFormatter={(value) => `${value.toFixed(2)}%`}
-            label={{
-              value: "Taux (%)",
-              angle: -90,
-              position: "insideLeft",
-              style: { fill: "hsl(var(--muted-foreground))", fontSize: 12 },
-            }}
-          />
-          <ChartTooltip
-            content={
-              <ChartTooltipContent
-                formatter={(value, name) => [
-                  `${Number(value).toFixed(4)}%`,
-                  METHOD_NAMES[name as string] || name,
-                ]}
-                labelFormatter={(label) => `Tenor: ${label}Y`}
-              />
-            }
-          />
-          <Legend
-            wrapperStyle={{ paddingTop: 20 }}
-            formatter={(value) => METHOD_NAMES[value] || value}
-          />
-
-          {/* Render lines for each method */}
-          {results.map((result) => (
-            <Line
-              key={result.method}
-              type="monotone"
-              dataKey={result.method}
-              stroke={METHOD_COLORS[result.method]}
-              strokeWidth={2}
-              dot={false}
-              connectNulls
+    <div className="space-y-4">
+      {/* Legend for input points */}
+      <div className="flex gap-6 justify-center text-sm">
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 bg-[hsl(142,76%,36%)] rounded-sm" />
+          <span className="text-muted-foreground">Swaps (Calibration exacte)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 rounded-full bg-primary" />
+          <span className="text-muted-foreground">Futures (Guides ajustés)</span>
+        </div>
+      </div>
+      
+      <ChartContainer config={chartConfig} className="h-[400px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+            <CartesianGrid
+              strokeDasharray="3 3"
+              stroke="hsl(var(--border))"
+              opacity={0.5}
             />
-          ))}
+            <XAxis
+              dataKey="tenor"
+              tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+              tickLine={{ stroke: "hsl(var(--border))" }}
+              axisLine={{ stroke: "hsl(var(--border))" }}
+              tickFormatter={(value) => `${value}Y`}
+              label={{
+                value: "Maturité (années)",
+                position: "insideBottom",
+                offset: -10,
+                style: { fill: "hsl(var(--muted-foreground))", fontSize: 12 },
+              }}
+            />
+            <YAxis
+              domain={[minRate, maxRate]}
+              tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+              tickLine={{ stroke: "hsl(var(--border))" }}
+              axisLine={{ stroke: "hsl(var(--border))" }}
+              tickFormatter={(value) => `${value.toFixed(2)}%`}
+              label={{
+                value: "Taux (%)",
+                angle: -90,
+                position: "insideLeft",
+                style: { fill: "hsl(var(--muted-foreground))", fontSize: 12 },
+              }}
+            />
+            <ChartTooltip
+              content={
+                <ChartTooltipContent
+                  formatter={(value, name) => {
+                    const displayName = name === 'swapInput' 
+                      ? 'Swap' 
+                      : name === 'futuresInput' 
+                        ? 'Futures'
+                        : METHOD_NAMES[name as string] || name;
+                    return [`${Number(value).toFixed(4)}%`, displayName];
+                  }}
+                  labelFormatter={(label) => `Tenor: ${label}Y`}
+                />
+              }
+            />
+            <Legend
+              wrapperStyle={{ paddingTop: 20 }}
+              formatter={(value) => {
+                if (value === 'swapInput') return 'Swaps';
+                if (value === 'futuresInput') return 'Futures';
+                return METHOD_NAMES[value] || value;
+              }}
+            />
 
-          {/* Scatter for input points */}
-          <Scatter
-            name="input"
-            dataKey="input"
-            fill="hsl(var(--foreground))"
-            shape={(props: any) => {
-              const { cx, cy, payload } = props;
-              if (payload.input === undefined) return null;
-              
-              const isFutures = payload.source === "futures";
-              return isFutures ? (
-                <circle cx={cx} cy={cy} r={4} fill="hsl(var(--primary))" stroke="hsl(var(--background))" strokeWidth={1} />
-              ) : (
-                <rect x={cx - 4} y={cy - 4} width={8} height={8} fill="hsl(142, 76%, 36%)" stroke="hsl(var(--background))" strokeWidth={1} />
-              );
-            }}
-          />
-        </ComposedChart>
-      </ResponsiveContainer>
-    </ChartContainer>
+            {/* Render lines for each method */}
+            {results.map((result) => (
+              <Line
+                key={result.method}
+                type="monotone"
+                dataKey={result.method}
+                stroke={METHOD_COLORS[result.method]}
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+              />
+            ))}
+
+            {/* Scatter for swap input points (squares) */}
+            <Scatter
+              name="swapInput"
+              dataKey="swapInput"
+              fill="hsl(142, 76%, 36%)"
+              shape={(props: any) => {
+                const { cx, cy, payload } = props;
+                if (payload.swapInput === undefined) return null;
+                return (
+                  <rect 
+                    x={cx - 5} 
+                    y={cy - 5} 
+                    width={10} 
+                    height={10} 
+                    fill="hsl(142, 76%, 36%)" 
+                    stroke="hsl(var(--background))" 
+                    strokeWidth={2} 
+                  />
+                );
+              }}
+            />
+
+            {/* Scatter for futures input points (circles) */}
+            <Scatter
+              name="futuresInput"
+              dataKey="futuresInput"
+              fill="hsl(var(--primary))"
+              shape={(props: any) => {
+                const { cx, cy, payload } = props;
+                if (payload.futuresInput === undefined) return null;
+                return (
+                  <circle 
+                    cx={cx} 
+                    cy={cy} 
+                    r={5} 
+                    fill="hsl(var(--primary))" 
+                    stroke="hsl(var(--background))" 
+                    strokeWidth={2} 
+                  />
+                );
+              }}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </ChartContainer>
+    </div>
   );
 }
