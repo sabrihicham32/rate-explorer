@@ -37,10 +37,18 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-const BOOTSTRAP_METHODS: { id: BootstrapMethod; name: string; description: string }[] = [
-  { id: "linear", name: "Simple/Linéaire", description: "Interpolation linéaire entre les points" },
-  { id: "cubic_spline", name: "Cubic Spline", description: "Interpolation par splines cubiques" },
-  { id: "nelson_siegel", name: "Nelson-Siegel", description: "Modèle paramétrique à 4 paramètres" },
+const BOOTSTRAP_METHODS: { id: BootstrapMethod; name: string; description: string; category: 'standard' | 'bloomberg' | 'quantlib' }[] = [
+  // Standard Methods
+  { id: "linear", name: "Simple/Linéaire", description: "Interpolation linéaire entre les points", category: 'standard' },
+  { id: "cubic_spline", name: "Cubic Spline", description: "Interpolation par splines cubiques naturelles", category: 'standard' },
+  { id: "nelson_siegel", name: "Nelson-Siegel", description: "Modèle paramétrique à 4 paramètres (β₀, β₁, β₂, λ)", category: 'standard' },
+  // Bloomberg Method
+  { id: "bloomberg", name: "Bloomberg", description: "Log-DF interpolation + forward smoothing + monotonicity", category: 'bloomberg' },
+  // QuantLib Methods
+  { id: "quantlib_log_linear", name: "QuantLib Log-Linear", description: "PiecewiseLogLinearDiscount - Interpolation linéaire sur log(DF)", category: 'quantlib' },
+  { id: "quantlib_log_cubic", name: "QuantLib Log-Cubic", description: "PiecewiseLogCubicDiscount - Spline cubique sur log(DF)", category: 'quantlib' },
+  { id: "quantlib_linear_forward", name: "QuantLib Linear Forward", description: "PiecewiseLinearForward - Interpolation linéaire sur forwards", category: 'quantlib' },
+  { id: "quantlib_monotonic_convex", name: "QuantLib Monotonic Convex", description: "Hagan-West monotonic convex - Préserve la monotonie des forwards", category: 'quantlib' },
 ];
 
 export function BootstrappingDashboard() {
@@ -155,7 +163,7 @@ export function BootstrappingDashboard() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {/* Data Sources */}
             <div className="space-y-4">
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
@@ -242,46 +250,100 @@ export function BootstrappingDashboard() {
             </div>
 
             {/* Methods */}
-            <div className="space-y-4">
+            <div className="space-y-4 md:col-span-2">
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
                 Méthodes
               </h3>
 
-              {BOOTSTRAP_METHODS.map((method) => (
-                <div key={method.id} className="flex items-start space-x-2">
-                  <Checkbox
-                    id={method.id}
-                    checked={selectedMethods.includes(method.id)}
-                    onCheckedChange={() => toggleMethod(method.id)}
-                  />
-                  <div className="grid gap-1">
-                    <Label htmlFor={method.id} className="font-medium">
-                      {method.name}
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      {method.description}
-                    </p>
-                  </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Standard Methods */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-medium text-primary uppercase">Standard</h4>
+                  {BOOTSTRAP_METHODS.filter(m => m.category === 'standard').map((method) => (
+                    <div key={method.id} className="flex items-start space-x-2">
+                      <Checkbox
+                        id={method.id}
+                        checked={selectedMethods.includes(method.id)}
+                        onCheckedChange={() => toggleMethod(method.id)}
+                      />
+                      <div className="grid gap-0.5">
+                        <Label htmlFor={method.id} className="font-medium text-sm">
+                          {method.name}
+                        </Label>
+                        <p className="text-xs text-muted-foreground leading-tight">
+                          {method.description}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+
+                {/* Bloomberg Method */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-medium text-blue-500 uppercase">Bloomberg</h4>
+                  {BOOTSTRAP_METHODS.filter(m => m.category === 'bloomberg').map((method) => (
+                    <div key={method.id} className="flex items-start space-x-2">
+                      <Checkbox
+                        id={method.id}
+                        checked={selectedMethods.includes(method.id)}
+                        onCheckedChange={() => toggleMethod(method.id)}
+                      />
+                      <div className="grid gap-0.5">
+                        <Label htmlFor={method.id} className="font-medium text-sm">
+                          {method.name}
+                        </Label>
+                        <p className="text-xs text-muted-foreground leading-tight">
+                          {method.description}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* QuantLib Methods */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-medium text-green-500 uppercase">QuantLib</h4>
+                  {BOOTSTRAP_METHODS.filter(m => m.category === 'quantlib').map((method) => (
+                    <div key={method.id} className="flex items-start space-x-2">
+                      <Checkbox
+                        id={method.id}
+                        checked={selectedMethods.includes(method.id)}
+                        onCheckedChange={() => toggleMethod(method.id)}
+                      />
+                      <div className="grid gap-0.5">
+                        <Label htmlFor={method.id} className="font-medium text-sm">
+                          {method.name}
+                        </Label>
+                        <p className="text-xs text-muted-foreground leading-tight">
+                          {method.description}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
 
+          </div>
+
+          {/* Second Row: Convention + Summary */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 pt-6 border-t border-border">
             {/* Basis Convention */}
             <div className="space-y-4">
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
                 Convention ({currency})
               </h3>
 
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
+              <div className="flex flex-wrap gap-4 text-sm">
+                <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">Day Count:</span>
                   <Badge variant="outline">{basisConvention.dayCount}</Badge>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">Compounding:</span>
                   <Badge variant="outline">{basisConvention.compounding}</Badge>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">Fréquence:</span>
                   <Badge variant="outline">{basisConvention.paymentFrequency}x/an</Badge>
                 </div>
@@ -294,28 +356,28 @@ export function BootstrappingDashboard() {
                 Résumé
               </h3>
 
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
+              <div className="flex flex-wrap gap-4 text-sm">
+                <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">Swaps (calibration):</span>
                   <Badge variant="default">{swapPoints.length}</Badge>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">Futures (guides):</span>
                   <Badge variant="secondary">{futuresPoints.length}</Badge>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">Méthodes:</span>
-                  <span className="font-medium">{selectedMethods.length}</span>
+                  <Badge variant="outline">{selectedMethods.length}</Badge>
                 </div>
+                {allInputPoints.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">Range:</span>
+                    <span className="font-mono text-xs">
+                      {allInputPoints[0]?.tenor.toFixed(2)}Y → {allInputPoints[allInputPoints.length - 1]?.tenor.toFixed(2)}Y
+                    </span>
+                  </div>
+                )}
               </div>
-
-              {allInputPoints.length > 0 && (
-                <div className="pt-2">
-                  <p className="text-xs text-muted-foreground">
-                    Maturités: {allInputPoints[0]?.tenor.toFixed(2)}Y → {allInputPoints[allInputPoints.length - 1]?.tenor.toFixed(2)}Y
-                  </p>
-                </div>
-              )}
             </div>
           </div>
         </CardContent>
