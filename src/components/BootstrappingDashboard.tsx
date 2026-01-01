@@ -1,8 +1,10 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRateData } from "@/hooks/useRateData";
 import { useIRSData } from "@/hooks/useIRSData";
 import { RATE_INDICES } from "@/lib/rateIndices";
 import { IRS_INDICES } from "@/lib/irsIndices";
+import { CURRENCY_CONFIGS, CurrencyConfig } from "@/lib/currencyDefaults";
+import { getCacheAge, clearAllCache } from "@/lib/dataCache";
 import {
   bootstrap,
   BootstrapPoint,
@@ -28,7 +30,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { DiscountFactorTable } from "./DiscountFactorTable";
 import { BootstrapCurveChart } from "./BootstrapCurveChart";
-import { Download, Calculator, TrendingUp, Settings2, Info } from "lucide-react";
+import { Download, Calculator, TrendingUp, Settings2, Info, RefreshCw, Plus, X, Clock, Layers } from "lucide-react";
 import { toast } from "sonner";
 import {
   Tooltip,
@@ -51,84 +53,152 @@ const BOOTSTRAP_METHODS: { id: BootstrapMethod; name: string; description: strin
   { id: "quantlib_monotonic_convex", name: "QuantLib Monotonic Convex", description: "Hagan-West monotonic convex - Préserve la monotonie des forwards", category: 'quantlib' },
 ];
 
-export function BootstrappingDashboard() {
-  // Data source selection
-  const [selectedFuturesIndex, setSelectedFuturesIndex] = useState(RATE_INDICES[0].id);
-  const [selectedIRSCurrency, setSelectedIRSCurrency] = useState(IRS_INDICES[0].id);
-  const [useFutures, setUseFutures] = useState(true);
-  const [useIRS, setUseIRS] = useState(true);
+interface CurveConfig {
+  id: string;
+  currency: string;
+  futuresIndex: string;
+  irsCurrency: string;
+  useFutures: boolean;
+  useIRS: boolean;
+}
 
-  // Method selection
+function generateCurveId(): string {
+  return `curve_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+function getDefaultCurveConfig(currencyConfig: CurrencyConfig): CurveConfig {
+  return {
+    id: generateCurveId(),
+    currency: currencyConfig.currency,
+    futuresIndex: currencyConfig.defaultFuturesIndex,
+    irsCurrency: currencyConfig.defaultIRSCurrency,
+    useFutures: true,
+    useIRS: true,
+  };
+}
+
+export function BootstrappingDashboard() {
+  // Multi-curve mode
+  const [curves, setCurves] = useState<CurveConfig[]>([
+    getDefaultCurveConfig(CURRENCY_CONFIGS[0]), // EUR by default
+  ]);
+  const [comparisonMode, setComparisonMode] = useState(false);
+
+  // Method selection (shared across curves)
   const [selectedMethods, setSelectedMethods] = useState<BootstrapMethod[]>(["linear", "cubic_spline"]);
 
-  // Fetch data
-  const { data: futuresData, isLoading: futuresLoading } = useRateData(selectedFuturesIndex);
-  const { data: irsData, isLoading: irsLoading } = useIRSData(selectedIRSCurrency);
+  // Active curve for single-curve view
+  const activeCurve = curves[0];
 
-  // Get currency from selected sources
-  const selectedFutures = RATE_INDICES.find((r) => r.id === selectedFuturesIndex);
-  const selectedIRS = IRS_INDICES.find((r) => r.id === selectedIRSCurrency);
-  
-  // Determine currency (prefer IRS currency if both selected)
-  const currency = useIRS && selectedIRS 
-    ? selectedIRS.currency 
-    : (useFutures && selectedFutures ? selectedFutures.currency : 'USD');
+  // Fetch data for all curves
+  const futuresQueries = curves.map(c => useRateData(c.futuresIndex));
+  const irsQueries = curves.map(c => useIRSData(c.irsCurrency));
 
-  const basisConvention = getBasisConvention(currency);
+  // Build results for each curve
+  const curveResults = useMemo(() => {
+    return curves.map((curve, idx) => {
+      const futuresData = futuresQueries[idx].data;
+      const irsData = irsQueries[idx].data;
+      const isLoading = futuresQueries[idx].isLoading || irsQueries[idx].isLoading;
 
-  // Separate swap and futures points
-  const { swapPoints, futuresPoints } = useMemo(() => {
-    const swaps: BootstrapPoint[] = [];
-    const futures: BootstrapPoint[] = [];
+      const swapPoints: BootstrapPoint[] = [];
+      const futuresPoints: BootstrapPoint[] = [];
 
-    // Add futures data (short end)
-    if (useFutures && futuresData?.data) {
-      futuresData.data.forEach((item) => {
-        const latestPrice = parseFloat(item.latest.replace(/[^0-9.-]/g, ""));
-        if (!isNaN(latestPrice)) {
-          const tenor = maturityToYears(item.maturity);
-          const rate = priceToRate(latestPrice);
-          if (tenor > 0 && rate > 0 && rate < 0.5) { // Filter unrealistic rates
-            futures.push({ 
-              tenor, 
-              rate, 
-              source: "futures",
-              priority: 2,
+      // Add futures data
+      if (curve.useFutures && futuresData?.data) {
+        futuresData.data.forEach((item) => {
+          const latestPrice = parseFloat(item.latest.replace(/[^0-9.-]/g, ""));
+          if (!isNaN(latestPrice)) {
+            const tenor = maturityToYears(item.maturity);
+            const rate = priceToRate(latestPrice);
+            if (tenor > 0 && rate > 0 && rate < 0.5) {
+              futuresPoints.push({ 
+                tenor, 
+                rate, 
+                source: "futures",
+                priority: 2,
+              });
+            }
+          }
+        });
+      }
+
+      // Add IRS data
+      if (curve.useIRS && irsData?.data) {
+        irsData.data.forEach((item) => {
+          if (item.rateValue > 0 && item.rateValue < 50) {
+            swapPoints.push({
+              tenor: item.tenor,
+              rate: item.rateValue / 100,
+              source: "swap",
+              priority: 1,
             });
           }
-        }
-      });
+        });
+      }
+
+      const allInputPoints = [...swapPoints, ...futuresPoints].sort((a, b) => a.tenor - b.tenor);
+
+      // Bootstrap
+      const results: BootstrapResult[] = 
+        swapPoints.length === 0 && futuresPoints.length === 0 
+          ? [] 
+          : selectedMethods.map((method) => bootstrap(swapPoints, futuresPoints, method, curve.currency));
+
+      return {
+        curve,
+        swapPoints,
+        futuresPoints,
+        allInputPoints,
+        results,
+        isLoading,
+        basisConvention: getBasisConvention(curve.currency),
+      };
+    });
+  }, [curves, futuresQueries, irsQueries, selectedMethods]);
+
+  const addCurve = () => {
+    // Find a currency not yet used
+    const usedCurrencies = new Set(curves.map(c => c.currency));
+    const availableCurrency = CURRENCY_CONFIGS.find(cc => !usedCurrencies.has(cc.currency));
+    
+    if (availableCurrency) {
+      setCurves([...curves, getDefaultCurveConfig(availableCurrency)]);
+      setComparisonMode(true);
+    } else {
+      toast.error("Toutes les devises sont déjà ajoutées");
     }
+  };
 
-    // Add IRS data (exact calibration points)
-    if (useIRS && irsData?.data) {
-      irsData.data.forEach((item) => {
-        if (item.rateValue > 0 && item.rateValue < 50) { // Filter unrealistic rates
-          swaps.push({
-            tenor: item.tenor,
-            rate: item.rateValue / 100, // Convert from percentage
-            source: "swap",
-            priority: 1,
-          });
-        }
-      });
+  const removeCurve = (id: string) => {
+    if (curves.length > 1) {
+      setCurves(curves.filter(c => c.id !== id));
+      if (curves.length === 2) {
+        setComparisonMode(false);
+      }
     }
+  };
 
-    return { swapPoints: swaps, futuresPoints: futures };
-  }, [useFutures, useIRS, futuresData, irsData]);
-
-  // Combined points for display
-  const allInputPoints = useMemo(() => {
-    return [...swapPoints, ...futuresPoints].sort((a, b) => a.tenor - b.tenor);
-  }, [swapPoints, futuresPoints]);
-
-  // Run bootstrapping for selected methods
-  const bootstrapResults = useMemo((): BootstrapResult[] => {
-    if (swapPoints.length === 0 && futuresPoints.length === 0) return [];
-    return selectedMethods.map((method) => 
-      bootstrap(swapPoints, futuresPoints, method, currency)
-    );
-  }, [swapPoints, futuresPoints, selectedMethods, currency]);
+  const updateCurve = (id: string, updates: Partial<CurveConfig>) => {
+    setCurves(curves.map(c => {
+      if (c.id !== id) return c;
+      
+      // If currency changed, update defaults
+      if (updates.currency && updates.currency !== c.currency) {
+        const config = CURRENCY_CONFIGS.find(cc => cc.currency === updates.currency);
+        if (config) {
+          return {
+            ...c,
+            currency: config.currency,
+            futuresIndex: config.defaultFuturesIndex,
+            irsCurrency: config.defaultIRSCurrency,
+          };
+        }
+      }
+      
+      return { ...c, ...updates };
+    }));
+  };
 
   const toggleMethod = (method: BootstrapMethod) => {
     setSelectedMethods((prev) =>
@@ -144,242 +214,276 @@ export function BootstrappingDashboard() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `discount_factors_${result.method}_${currency}.csv`;
+    a.download = `discount_factors_${result.method}_${result.currency}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     toast.success("Discount factors exportés en CSV");
   };
 
-  const isLoading = futuresLoading || irsLoading;
+  const handleClearCache = () => {
+    clearAllCache();
+    toast.success("Cache vidé - les données seront rafraîchies");
+    // Trigger refresh for all queries
+    futuresQueries.forEach(q => q.refetch());
+    irsQueries.forEach(q => q.refetch());
+  };
+
+  const isLoading = curveResults.some(r => r.isLoading);
+  const activeResult = curveResults[0];
+
+  // Combined results for comparison chart
+  const allResultsForComparison = useMemo(() => {
+    if (!comparisonMode) return activeResult?.results || [];
+    
+    // For comparison, take the first method from each curve
+    const firstMethod = selectedMethods[0];
+    return curveResults
+      .map(cr => cr.results.find(r => r.method === firstMethod))
+      .filter((r): r is BootstrapResult => !!r);
+  }, [comparisonMode, curveResults, selectedMethods, activeResult]);
 
   return (
     <div className="space-y-6">
       {/* Configuration Panel */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="flex items-center gap-2">
             <Settings2 className="w-5 h-5" />
             Configuration du Bootstrapping
           </CardTitle>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setComparisonMode(!comparisonMode)}
+              className={comparisonMode ? "bg-primary/10" : ""}
+            >
+              <Layers className="w-4 h-4 mr-2" />
+              {comparisonMode ? "Mode Comparaison" : "Comparer"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClearCache}
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Vider Cache
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {/* Data Sources */}
-            <div className="space-y-4">
+          {/* Currency/Curve Selection */}
+          <div className="space-y-4 mb-6">
+            <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                Sources de données
+                Courbes de Taux
               </h3>
-
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="useFutures"
-                  checked={useFutures}
-                  onCheckedChange={(checked) => setUseFutures(checked === true)}
-                />
-                <Label htmlFor="useFutures" className="flex items-center gap-1">
-                  Rate Futures (Guides)
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger>
-                        <Info className="w-3 h-3 text-muted-foreground" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs text-xs">
-                          Les futures sont utilisés comme guides entre les swaps.
-                          Ils sont ajustés pour éviter l'arbitrage.
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </Label>
-              </div>
-
-              {useFutures && (
-                <Select value={selectedFuturesIndex} onValueChange={setSelectedFuturesIndex}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Sélectionner l'indice" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {RATE_INDICES.map((index) => (
-                      <SelectItem key={index.id} value={index.id}>
-                        {index.name} ({index.currency})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="useIRS"
-                  checked={useIRS}
-                  onCheckedChange={(checked) => setUseIRS(checked === true)}
-                />
-                <Label htmlFor="useIRS" className="flex items-center gap-1">
-                  IRS Swaps (Calibration)
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger>
-                        <Info className="w-3 h-3 text-muted-foreground" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p className="max-w-xs text-xs">
-                          Les swaps sont les points de calibration exacts.
-                          Ils sont toujours forcés dans la courbe.
-                        </p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                </Label>
-              </div>
-
-              {useIRS && (
-                <Select value={selectedIRSCurrency} onValueChange={setSelectedIRSCurrency}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Sélectionner la devise" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {IRS_INDICES.map((index) => (
-                      <SelectItem key={index.id} value={index.id}>
-                        {index.name} ({index.currency})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              {curves.length < CURRENCY_CONFIGS.length && (
+                <Button variant="outline" size="sm" onClick={addCurve}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Ajouter Courbe
+                </Button>
               )}
             </div>
 
-            {/* Methods */}
-            <div className="space-y-4 md:col-span-2">
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                Méthodes
-              </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {curves.map((curve, idx) => {
+                const currencyConfig = CURRENCY_CONFIGS.find(c => c.currency === curve.currency);
+                const futuresIndex = RATE_INDICES.find(r => r.id === curve.futuresIndex);
+                const futuresCacheAge = getCacheAge(curve.futuresIndex, "rates");
+                const irsCacheAge = getCacheAge(curve.irsCurrency, "irs");
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {/* Standard Methods */}
-                <div className="space-y-3">
-                  <h4 className="text-xs font-medium text-primary uppercase">Standard</h4>
-                  {BOOTSTRAP_METHODS.filter(m => m.category === 'standard').map((method) => (
-                    <div key={method.id} className="flex items-start space-x-2">
-                      <Checkbox
-                        id={method.id}
-                        checked={selectedMethods.includes(method.id)}
-                        onCheckedChange={() => toggleMethod(method.id)}
-                      />
-                      <div className="grid gap-0.5">
-                        <Label htmlFor={method.id} className="font-medium text-sm">
-                          {method.name}
-                        </Label>
-                        <p className="text-xs text-muted-foreground leading-tight">
-                          {method.description}
+                return (
+                  <div
+                    key={curve.id}
+                    className="p-4 border rounded-lg bg-card relative"
+                  >
+                    {curves.length > 1 && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="absolute top-2 right-2 h-6 w-6"
+                        onClick={() => removeCurve(curve.id)}
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    )}
+
+                    {/* Currency Selector */}
+                    <div className="space-y-3">
+                      <Select
+                        value={curve.currency}
+                        onValueChange={(value) => updateCurve(curve.id, { currency: value })}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Devise" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CURRENCY_CONFIGS.map((config) => (
+                            <SelectItem 
+                              key={config.currency} 
+                              value={config.currency}
+                              disabled={curves.some(c => c.id !== curve.id && c.currency === config.currency)}
+                            >
+                              {config.currency} - {config.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+
+                      {currencyConfig && (
+                        <p className="text-xs text-muted-foreground">
+                          {currencyConfig.description}
                         </p>
+                      )}
+
+                      {/* Data Sources */}
+                      <div className="space-y-2 pt-2 border-t">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <Checkbox
+                              id={`futures-${curve.id}`}
+                              checked={curve.useFutures}
+                              onCheckedChange={(checked) => 
+                                updateCurve(curve.id, { useFutures: checked === true })
+                              }
+                            />
+                            <Label htmlFor={`futures-${curve.id}`} className="text-sm">
+                              {futuresIndex?.name || curve.futuresIndex}
+                            </Label>
+                          </div>
+                          {futuresCacheAge && (
+                            <span className="text-xs text-muted-foreground flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {futuresCacheAge}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <Checkbox
+                              id={`irs-${curve.id}`}
+                              checked={curve.useIRS}
+                              onCheckedChange={(checked) => 
+                                updateCurve(curve.id, { useIRS: checked === true })
+                              }
+                            />
+                            <Label htmlFor={`irs-${curve.id}`} className="text-sm">
+                              {curve.irsCurrency.toUpperCase()} IRS
+                            </Label>
+                          </div>
+                          {irsCacheAge && (
+                            <span className="text-xs text-muted-foreground flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {irsCacheAge}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Summary */}
+                      <div className="flex flex-wrap gap-2 pt-2">
+                        <Badge variant="default" className="text-xs">
+                          {curveResults[idx]?.swapPoints.length || 0} swaps
+                        </Badge>
+                        <Badge variant="secondary" className="text-xs">
+                          {curveResults[idx]?.futuresPoints.length || 0} futures
+                        </Badge>
                       </div>
                     </div>
-                  ))}
-                </div>
-
-                {/* Bloomberg Method */}
-                <div className="space-y-3">
-                  <h4 className="text-xs font-medium text-blue-500 uppercase">Bloomberg</h4>
-                  {BOOTSTRAP_METHODS.filter(m => m.category === 'bloomberg').map((method) => (
-                    <div key={method.id} className="flex items-start space-x-2">
-                      <Checkbox
-                        id={method.id}
-                        checked={selectedMethods.includes(method.id)}
-                        onCheckedChange={() => toggleMethod(method.id)}
-                      />
-                      <div className="grid gap-0.5">
-                        <Label htmlFor={method.id} className="font-medium text-sm">
-                          {method.name}
-                        </Label>
-                        <p className="text-xs text-muted-foreground leading-tight">
-                          {method.description}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* QuantLib Methods */}
-                <div className="space-y-3">
-                  <h4 className="text-xs font-medium text-green-500 uppercase">QuantLib</h4>
-                  {BOOTSTRAP_METHODS.filter(m => m.category === 'quantlib').map((method) => (
-                    <div key={method.id} className="flex items-start space-x-2">
-                      <Checkbox
-                        id={method.id}
-                        checked={selectedMethods.includes(method.id)}
-                        onCheckedChange={() => toggleMethod(method.id)}
-                      />
-                      <div className="grid gap-0.5">
-                        <Label htmlFor={method.id} className="font-medium text-sm">
-                          {method.name}
-                        </Label>
-                        <p className="text-xs text-muted-foreground leading-tight">
-                          {method.description}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-          </div>
-
-          {/* Second Row: Convention + Summary */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6 pt-6 border-t border-border">
-            {/* Basis Convention */}
-            <div className="space-y-4">
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                Convention ({currency})
-              </h3>
-
-              <div className="flex flex-wrap gap-4 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Day Count:</span>
-                  <Badge variant="outline">{basisConvention.dayCount}</Badge>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Compounding:</span>
-                  <Badge variant="outline">{basisConvention.compounding}</Badge>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Fréquence:</span>
-                  <Badge variant="outline">{basisConvention.paymentFrequency}x/an</Badge>
-                </div>
-              </div>
-            </div>
-
-            {/* Summary */}
-            <div className="space-y-4">
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-                Résumé
-              </h3>
-
-              <div className="flex flex-wrap gap-4 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Swaps (calibration):</span>
-                  <Badge variant="default">{swapPoints.length}</Badge>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Futures (guides):</span>
-                  <Badge variant="secondary">{futuresPoints.length}</Badge>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Méthodes:</span>
-                  <Badge variant="outline">{selectedMethods.length}</Badge>
-                </div>
-                {allInputPoints.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground">Range:</span>
-                    <span className="font-mono text-xs">
-                      {allInputPoints[0]?.tenor.toFixed(2)}Y → {allInputPoints[allInputPoints.length - 1]?.tenor.toFixed(2)}Y
-                    </span>
                   </div>
-                )}
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Methods Selection */}
+          <div className="space-y-4 pt-4 border-t">
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+              Méthodes de Bootstrapping
+            </h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Standard Methods */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-medium text-primary uppercase">Standard</h4>
+                {BOOTSTRAP_METHODS.filter(m => m.category === 'standard').map((method) => (
+                  <div key={method.id} className="flex items-start space-x-2">
+                    <Checkbox
+                      id={method.id}
+                      checked={selectedMethods.includes(method.id)}
+                      onCheckedChange={() => toggleMethod(method.id)}
+                    />
+                    <div className="grid gap-0.5">
+                      <Label htmlFor={method.id} className="font-medium text-sm">
+                        {method.name}
+                      </Label>
+                      <p className="text-xs text-muted-foreground leading-tight">
+                        {method.description}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Bloomberg Method */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-medium text-blue-500 uppercase">Bloomberg</h4>
+                {BOOTSTRAP_METHODS.filter(m => m.category === 'bloomberg').map((method) => (
+                  <div key={method.id} className="flex items-start space-x-2">
+                    <Checkbox
+                      id={method.id}
+                      checked={selectedMethods.includes(method.id)}
+                      onCheckedChange={() => toggleMethod(method.id)}
+                    />
+                    <div className="grid gap-0.5">
+                      <Label htmlFor={method.id} className="font-medium text-sm">
+                        {method.name}
+                      </Label>
+                      <p className="text-xs text-muted-foreground leading-tight">
+                        {method.description}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* QuantLib Methods */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-medium text-green-500 uppercase">QuantLib</h4>
+                {BOOTSTRAP_METHODS.filter(m => m.category === 'quantlib').map((method) => (
+                  <div key={method.id} className="flex items-start space-x-2">
+                    <Checkbox
+                      id={method.id}
+                      checked={selectedMethods.includes(method.id)}
+                      onCheckedChange={() => toggleMethod(method.id)}
+                    />
+                    <div className="grid gap-0.5">
+                      <Label htmlFor={method.id} className="font-medium text-sm">
+                        {method.name}
+                      </Label>
+                      <p className="text-xs text-muted-foreground leading-tight">
+                        {method.description}
+                      </p>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
+
+          {/* Convention Display (for active curve) */}
+          {activeResult && (
+            <div className="flex flex-wrap gap-4 mt-6 pt-6 border-t text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Convention ({activeCurve.currency}):</span>
+                <Badge variant="outline">{activeResult.basisConvention.dayCount}</Badge>
+                <Badge variant="outline">{activeResult.basisConvention.compounding}</Badge>
+                <Badge variant="outline">{activeResult.basisConvention.paymentFrequency}x/an</Badge>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -391,7 +495,7 @@ export function BootstrappingDashboard() {
             <p className="text-muted-foreground">Chargement des données...</p>
           </CardContent>
         </Card>
-      ) : allInputPoints.length < 2 ? (
+      ) : activeResult && activeResult.allInputPoints.length < 2 ? (
         <Card>
           <CardContent className="py-12 text-center">
             <TrendingUp className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
@@ -404,6 +508,7 @@ export function BootstrappingDashboard() {
         <Tabs defaultValue="chart" className="space-y-4">
           <TabsList>
             <TabsTrigger value="chart">Courbes</TabsTrigger>
+            {comparisonMode && <TabsTrigger value="comparison">Comparaison</TabsTrigger>}
             <TabsTrigger value="discount_factors">Discount Factors</TabsTrigger>
             <TabsTrigger value="input_data">Données d'entrée</TabsTrigger>
           </TabsList>
@@ -411,24 +516,52 @@ export function BootstrappingDashboard() {
           <TabsContent value="chart">
             <Card>
               <CardHeader>
-                <CardTitle>Courbes de Taux Bootstrappées ({currency})</CardTitle>
+                <CardTitle>
+                  Courbes de Taux Bootstrappées ({activeCurve.currency})
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <BootstrapCurveChart
-                  results={bootstrapResults}
-                  inputPoints={allInputPoints}
+                  results={activeResult?.results || []}
+                  inputPoints={activeResult?.allInputPoints || []}
                 />
               </CardContent>
             </Card>
           </TabsContent>
 
+          {comparisonMode && (
+            <TabsContent value="comparison">
+              <Card>
+                <CardHeader>
+                  <CardTitle>
+                    Comparaison Multi-Devises ({selectedMethods[0] ? BOOTSTRAP_METHODS.find(m => m.id === selectedMethods[0])?.name : ''})
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-6">
+                    {curveResults.map((cr, idx) => (
+                      <div key={cr.curve.id}>
+                        <BootstrapCurveChart
+                          results={cr.results.filter(r => r.method === selectedMethods[0])}
+                          inputPoints={cr.allInputPoints}
+                          title={`${cr.curve.currency} - ${CURRENCY_CONFIGS.find(c => c.currency === cr.curve.currency)?.description}`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
+
           <TabsContent value="discount_factors" className="space-y-4">
-            {bootstrapResults.map((result) => (
-              <Card key={result.method}>
+            {(comparisonMode ? curveResults.flatMap(cr => cr.results) : activeResult?.results || []).map((result, idx) => (
+              <Card key={`${result.method}-${result.currency}-${idx}`}>
                 <CardHeader className="flex flex-row items-center justify-between">
                   <div>
                     <CardTitle className="text-base">
                       {BOOTSTRAP_METHODS.find((m) => m.id === result.method)?.name}
+                      <Badge variant="outline" className="ml-2">{result.currency}</Badge>
                       <span className="ml-2 text-sm font-normal text-muted-foreground">
                         ({result.basisConvention.dayCount}, {result.basisConvention.compounding})
                       </span>
@@ -459,53 +592,58 @@ export function BootstrappingDashboard() {
           </TabsContent>
 
           <TabsContent value="input_data">
-            <Card>
-              <CardHeader>
-                <CardTitle>Points de Données d'Entrée</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="mb-4 p-3 bg-muted/50 rounded-lg">
-                  <p className="text-sm text-muted-foreground">
-                    <strong>Swaps</strong> = Points de calibration exacts (forcés) | 
-                    <strong> Futures</strong> = Guides entre swaps (ajustés si nécessaire)
-                  </p>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border">
-                        <th className="py-3 px-4 text-left font-medium text-muted-foreground">Tenor (Y)</th>
-                        <th className="py-3 px-4 text-right font-medium text-muted-foreground">Taux (%)</th>
-                        <th className="py-3 px-4 text-center font-medium text-muted-foreground">Source</th>
-                        <th className="py-3 px-4 text-center font-medium text-muted-foreground">Priorité</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {allInputPoints.map((point, idx) => (
-                        <tr key={idx} className="border-b border-border/50 hover:bg-muted/50">
-                          <td className="py-2 px-4 font-mono">{point.tenor.toFixed(2)}</td>
-                          <td className="py-2 px-4 text-right font-mono">{(point.rate * 100).toFixed(4)}%</td>
-                          <td className="py-2 px-4 text-center">
-                            <Badge 
-                              variant={point.source === "swap" ? "default" : "secondary"}
-                              className={point.adjusted ? "opacity-70" : ""}
-                            >
-                              {point.source === "swap" ? "Swap" : "Futures"}
-                              {point.adjusted && " (adj)"}
-                            </Badge>
-                          </td>
-                          <td className="py-2 px-4 text-center">
-                            <span className={point.priority === 1 ? "font-bold text-primary" : "text-muted-foreground"}>
-                              {point.priority === 1 ? "Calibration" : "Guide"}
-                            </span>
-                          </td>
+            {(comparisonMode ? curveResults : [activeResult]).filter(Boolean).map((cr, idx) => (
+              <Card key={cr!.curve.id} className={idx > 0 ? "mt-4" : ""}>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    Points de Données d'Entrée
+                    {comparisonMode && <Badge variant="outline">{cr!.curve.currency}</Badge>}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="mb-4 p-3 bg-muted/50 rounded-lg">
+                    <p className="text-sm text-muted-foreground">
+                      <strong>Swaps</strong> = Points de calibration exacts (forcés) | 
+                      <strong> Futures</strong> = Guides entre swaps (ajustés si nécessaire)
+                    </p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border">
+                          <th className="py-3 px-4 text-left font-medium text-muted-foreground">Tenor (Y)</th>
+                          <th className="py-3 px-4 text-right font-medium text-muted-foreground">Taux (%)</th>
+                          <th className="py-3 px-4 text-center font-medium text-muted-foreground">Source</th>
+                          <th className="py-3 px-4 text-center font-medium text-muted-foreground">Priorité</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+                      </thead>
+                      <tbody>
+                        {cr!.allInputPoints.map((point, pidx) => (
+                          <tr key={pidx} className="border-b border-border/50 hover:bg-muted/50">
+                            <td className="py-2 px-4 font-mono">{point.tenor.toFixed(2)}</td>
+                            <td className="py-2 px-4 text-right font-mono">{(point.rate * 100).toFixed(4)}%</td>
+                            <td className="py-2 px-4 text-center">
+                              <Badge 
+                                variant={point.source === "swap" ? "default" : "secondary"}
+                                className={point.adjusted ? "opacity-70" : ""}
+                              >
+                                {point.source === "swap" ? "Swap" : "Futures"}
+                                {point.adjusted && " (adj)"}
+                              </Badge>
+                            </td>
+                            <td className="py-2 px-4 text-center">
+                              <span className={point.priority === 1 ? "font-bold text-primary" : "text-muted-foreground"}>
+                                {point.priority === 1 ? "Calibration" : "Guide"}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </TabsContent>
         </Tabs>
       )}
