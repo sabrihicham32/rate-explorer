@@ -1,8 +1,19 @@
 import { supabase } from '@/integrations/supabase/client';
 import { IRSResponse } from '@/lib/irsIndices';
+import { getCachedIRSData, setCachedIRSData } from '@/lib/dataCache';
 
-export async function fetchIRSRates(currency: string): Promise<IRSResponse> {
+export async function fetchIRSRates(currency: string, forceRefresh = false): Promise<IRSResponse> {
+  // Check cache first (unless force refresh)
+  if (!forceRefresh) {
+    const cached = getCachedIRSData(currency);
+    if (cached) {
+      console.log(`Using cached IRS data for ${currency}`);
+      return cached;
+    }
+  }
+
   try {
+    console.log(`Fetching fresh IRS data for ${currency}`);
     const { data, error } = await supabase.functions.invoke('scrape-irs', {
       body: { currency },
     });
@@ -12,7 +23,14 @@ export async function fetchIRSRates(currency: string): Promise<IRSResponse> {
       return { success: false, error: error.message };
     }
 
-    return data as IRSResponse;
+    const response = data as IRSResponse;
+    
+    // Cache successful responses
+    if (response.success && response.data) {
+      setCachedIRSData(currency, response);
+    }
+
+    return response;
   } catch (error) {
     console.error('Error fetching IRS rates:', error);
     return { 

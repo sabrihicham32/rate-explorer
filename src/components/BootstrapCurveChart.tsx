@@ -19,28 +19,47 @@ import {
 interface BootstrapCurveChartProps {
   results: BootstrapResult[];
   inputPoints: BootstrapPoint[];
+  showInputPoints?: boolean;
+  title?: string;
 }
 
 const METHOD_COLORS: Record<string, string> = {
   linear: "hsl(var(--primary))",
   cubic_spline: "hsl(142, 76%, 36%)",
   nelson_siegel: "hsl(280, 70%, 50%)",
+  bloomberg: "hsl(210, 100%, 50%)",
+  quantlib_log_linear: "hsl(30, 100%, 50%)",
+  quantlib_log_cubic: "hsl(350, 80%, 50%)",
+  quantlib_linear_forward: "hsl(180, 70%, 40%)",
+  quantlib_monotonic_convex: "hsl(60, 70%, 45%)",
 };
 
 const METHOD_NAMES: Record<string, string> = {
   linear: "Linéaire",
   cubic_spline: "Cubic Spline",
   nelson_siegel: "Nelson-Siegel",
+  bloomberg: "Bloomberg",
+  quantlib_log_linear: "QL Log-Linear",
+  quantlib_log_cubic: "QL Log-Cubic",
+  quantlib_linear_forward: "QL Linear Fwd",
+  quantlib_monotonic_convex: "QL Monotonic",
 };
 
-export function BootstrapCurveChart({ results, inputPoints }: BootstrapCurveChartProps) {
+export function BootstrapCurveChart({ 
+  results, 
+  inputPoints, 
+  showInputPoints = true,
+  title 
+}: BootstrapCurveChartProps) {
   const chartData = useMemo(() => {
     if (results.length === 0) return [];
 
     // Get all unique tenors from all results
     const allTenors = new Set<number>();
     results.forEach((r) => r.curvePoints.forEach((p) => allTenors.add(p.tenor)));
-    inputPoints.forEach((p) => allTenors.add(p.tenor));
+    if (showInputPoints) {
+      inputPoints.forEach((p) => allTenors.add(p.tenor));
+    }
 
     const sortedTenors = Array.from(allTenors).sort((a, b) => a - b);
 
@@ -58,21 +77,23 @@ export function BootstrapCurveChart({ results, inputPoints }: BootstrapCurveChar
       });
 
       // Add input points - separate swaps and futures
-      const inputPoint = inputPoints.find(
-        (p) => Math.abs(p.tenor - tenor) < 0.01
-      );
-      if (inputPoint) {
-        if (inputPoint.source === 'swap') {
-          point.swapInput = inputPoint.rate * 100;
-        } else {
-          point.futuresInput = inputPoint.rate * 100;
+      if (showInputPoints) {
+        const inputPoint = inputPoints.find(
+          (p) => Math.abs(p.tenor - tenor) < 0.01
+        );
+        if (inputPoint) {
+          if (inputPoint.source === 'swap') {
+            point.swapInput = inputPoint.rate * 100;
+          } else {
+            point.futuresInput = inputPoint.rate * 100;
+          }
+          point.source = inputPoint.source;
         }
-        point.source = inputPoint.source;
       }
 
       return point;
     });
-  }, [results, inputPoints]);
+  }, [results, inputPoints, showInputPoints]);
 
   const chartConfig = useMemo(() => {
     const config: Record<string, { label: string; color: string }> = {};
@@ -112,17 +133,21 @@ export function BootstrapCurveChart({ results, inputPoints }: BootstrapCurveChar
 
   return (
     <div className="space-y-4">
+      {title && <h3 className="text-sm font-medium text-muted-foreground">{title}</h3>}
+      
       {/* Legend for input points */}
-      <div className="flex gap-6 justify-center text-sm">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 bg-[hsl(142,76%,36%)] rounded-sm" />
-          <span className="text-muted-foreground">Swaps (Calibration exacte)</span>
+      {showInputPoints && (
+        <div className="flex gap-6 justify-center text-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 bg-[hsl(142,76%,36%)] rounded-sm" />
+            <span className="text-muted-foreground">Swaps (Calibration exacte)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full bg-primary" />
+            <span className="text-muted-foreground">Futures (Guides ajustés)</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-primary" />
-          <span className="text-muted-foreground">Futures (Guides ajustés)</span>
-        </div>
-      </div>
+      )}
       
       <ChartContainer config={chartConfig} className="h-[400px] w-full">
         <ResponsiveContainer width="100%" height="100%">
@@ -188,7 +213,7 @@ export function BootstrapCurveChart({ results, inputPoints }: BootstrapCurveChar
                 key={result.method}
                 type="monotone"
                 dataKey={result.method}
-                stroke={METHOD_COLORS[result.method]}
+                stroke={METHOD_COLORS[result.method] || "hsl(var(--primary))"}
                 strokeWidth={2}
                 dot={false}
                 connectNulls
@@ -196,47 +221,51 @@ export function BootstrapCurveChart({ results, inputPoints }: BootstrapCurveChar
             ))}
 
             {/* Scatter for swap input points (squares) */}
-            <Scatter
-              name="swapInput"
-              dataKey="swapInput"
-              fill="hsl(142, 76%, 36%)"
-              shape={(props: any) => {
-                const { cx, cy, payload } = props;
-                if (payload.swapInput === undefined) return null;
-                return (
-                  <rect 
-                    x={cx - 5} 
-                    y={cy - 5} 
-                    width={10} 
-                    height={10} 
-                    fill="hsl(142, 76%, 36%)" 
-                    stroke="hsl(var(--background))" 
-                    strokeWidth={2} 
-                  />
-                );
-              }}
-            />
+            {showInputPoints && (
+              <Scatter
+                name="swapInput"
+                dataKey="swapInput"
+                fill="hsl(142, 76%, 36%)"
+                shape={(props: any) => {
+                  const { cx, cy, payload } = props;
+                  if (payload.swapInput === undefined) return null;
+                  return (
+                    <rect 
+                      x={cx - 5} 
+                      y={cy - 5} 
+                      width={10} 
+                      height={10} 
+                      fill="hsl(142, 76%, 36%)" 
+                      stroke="hsl(var(--background))" 
+                      strokeWidth={2} 
+                    />
+                  );
+                }}
+              />
+            )}
 
             {/* Scatter for futures input points (circles) */}
-            <Scatter
-              name="futuresInput"
-              dataKey="futuresInput"
-              fill="hsl(var(--primary))"
-              shape={(props: any) => {
-                const { cx, cy, payload } = props;
-                if (payload.futuresInput === undefined) return null;
-                return (
-                  <circle 
-                    cx={cx} 
-                    cy={cy} 
-                    r={5} 
-                    fill="hsl(var(--primary))" 
-                    stroke="hsl(var(--background))" 
-                    strokeWidth={2} 
-                  />
-                );
-              }}
-            />
+            {showInputPoints && (
+              <Scatter
+                name="futuresInput"
+                dataKey="futuresInput"
+                fill="hsl(var(--primary))"
+                shape={(props: any) => {
+                  const { cx, cy, payload } = props;
+                  if (payload.futuresInput === undefined) return null;
+                  return (
+                    <circle 
+                      cx={cx} 
+                      cy={cy} 
+                      r={5} 
+                      fill="hsl(var(--primary))" 
+                      stroke="hsl(var(--background))" 
+                      strokeWidth={2} 
+                    />
+                  );
+                }}
+              />
+            )}
           </ComposedChart>
         </ResponsiveContainer>
       </ChartContainer>

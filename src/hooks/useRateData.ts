@@ -1,11 +1,28 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchRateData } from "@/lib/api/rates";
+import { useCallback } from "react";
 
 export function useRateData(index: string) {
-  return useQuery({
+  const queryClient = useQueryClient();
+
+  const query = useQuery({
     queryKey: ["rateData", index],
-    queryFn: () => fetchRateData(index),
-    staleTime: 1000 * 60 * 5, // 5 minutes
-    refetchInterval: 1000 * 60 * 5, // Refetch every 5 minutes
+    queryFn: () => fetchRateData(index, false),
+    staleTime: 1000 * 60 * 30, // 30 minutes (matches cache duration)
+    refetchInterval: false, // Don't auto-refetch, use cache
+    refetchOnWindowFocus: false,
   });
+
+  const forceRefresh = useCallback(() => {
+    // Force refresh bypasses cache
+    queryClient.fetchQuery({
+      queryKey: ["rateData", index],
+      queryFn: () => fetchRateData(index, true),
+    });
+  }, [queryClient, index]);
+
+  return {
+    ...query,
+    forceRefresh,
+  };
 }

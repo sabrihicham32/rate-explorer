@@ -1,8 +1,19 @@
 import { supabase } from "@/integrations/supabase/client";
 import { RateResponse } from "@/lib/rateIndices";
+import { getCachedRateData, setCachedRateData } from "@/lib/dataCache";
 
-export async function fetchRateData(index: string): Promise<RateResponse> {
+export async function fetchRateData(index: string, forceRefresh = false): Promise<RateResponse> {
+  // Check cache first (unless force refresh)
+  if (!forceRefresh) {
+    const cached = getCachedRateData(index);
+    if (cached) {
+      console.log(`Using cached rate data for ${index}`);
+      return cached;
+    }
+  }
+
   try {
+    console.log(`Fetching fresh rate data for ${index}`);
     const { data, error } = await supabase.functions.invoke("scrape-rates", {
       body: { index },
     });
@@ -12,7 +23,14 @@ export async function fetchRateData(index: string): Promise<RateResponse> {
       return { success: false, error: error.message };
     }
 
-    return data as RateResponse;
+    const response = data as RateResponse;
+    
+    // Cache successful responses
+    if (response.success && response.data) {
+      setCachedRateData(index, response);
+    }
+
+    return response;
   } catch (err) {
     console.error("Error calling edge function:", err);
     return { 
