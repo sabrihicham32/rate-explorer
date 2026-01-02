@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { BootstrapResult, BootstrapPoint } from "@/lib/bootstrapping";
 import {
   ChartContainer,
@@ -15,6 +15,8 @@ import {
   ComposedChart,
   Legend,
 } from "recharts";
+import { Button } from "@/components/ui/button";
+import { Eye, EyeOff } from "lucide-react";
 
 interface BootstrapCurveChartProps {
   results: BootstrapResult[];
@@ -48,16 +50,17 @@ const METHOD_NAMES: Record<string, string> = {
 export function BootstrapCurveChart({ 
   results, 
   inputPoints, 
-  showInputPoints = true,
+  showInputPoints: initialShowInputPoints = true,
   title 
 }: BootstrapCurveChartProps) {
+  const [showPoints, setShowPoints] = useState(initialShowInputPoints);
   const chartData = useMemo(() => {
     if (results.length === 0) return [];
 
     // Get all unique tenors from all results
     const allTenors = new Set<number>();
     results.forEach((r) => r.curvePoints.forEach((p) => allTenors.add(p.tenor)));
-    if (showInputPoints) {
+    if (showPoints) {
       inputPoints.forEach((p) => allTenors.add(p.tenor));
     }
 
@@ -77,7 +80,7 @@ export function BootstrapCurveChart({
       });
 
       // Add input points - separate swaps and futures
-      if (showInputPoints) {
+      if (showPoints) {
         const inputPoint = inputPoints.find(
           (p) => Math.abs(p.tenor - tenor) < 0.01
         );
@@ -93,7 +96,7 @@ export function BootstrapCurveChart({
 
       return point;
     });
-  }, [results, inputPoints, showInputPoints]);
+  }, [results, inputPoints, showPoints]);
 
   const chartConfig = useMemo(() => {
     const config: Record<string, { label: string; color: string }> = {};
@@ -133,10 +136,21 @@ export function BootstrapCurveChart({
 
   return (
     <div className="space-y-4">
-      {title && <h3 className="text-sm font-medium text-muted-foreground">{title}</h3>}
+      <div className="flex items-center justify-between">
+        {title && <h3 className="text-sm font-medium text-muted-foreground">{title}</h3>}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowPoints(!showPoints)}
+          className="ml-auto"
+        >
+          {showPoints ? <EyeOff className="w-4 h-4 mr-2" /> : <Eye className="w-4 h-4 mr-2" />}
+          {showPoints ? "Masquer Points" : "Afficher Points"}
+        </Button>
+      </div>
       
       {/* Legend for input points */}
-      {showInputPoints && (
+      {showPoints && (
         <div className="flex gap-6 justify-center text-sm">
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 bg-[hsl(142,76%,36%)] rounded-sm" />
@@ -221,7 +235,7 @@ export function BootstrapCurveChart({
             ))}
 
             {/* Scatter for swap input points (squares) */}
-            {showInputPoints && (
+            {showPoints && (
               <Scatter
                 name="swapInput"
                 dataKey="swapInput"
@@ -245,7 +259,7 @@ export function BootstrapCurveChart({
             )}
 
             {/* Scatter for futures input points (circles) */}
-            {showInputPoints && (
+            {showPoints && (
               <Scatter
                 name="futuresInput"
                 dataKey="futuresInput"

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useRateData } from "@/hooks/useRateData";
 import { useIRSData } from "@/hooks/useIRSData";
 import { RATE_INDICES } from "@/lib/rateIndices";
@@ -30,14 +30,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { DiscountFactorTable } from "./DiscountFactorTable";
 import { BootstrapCurveChart } from "./BootstrapCurveChart";
-import { Download, Calculator, TrendingUp, Settings2, Info, RefreshCw, Plus, X, Clock, Layers } from "lucide-react";
+import { BootstrappingDocumentation } from "./BootstrappingDocumentation";
+import { Download, Calculator, TrendingUp, Settings2, RefreshCw, Plus, X, Clock, Layers, Database, BookOpen, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
 const BOOTSTRAP_METHODS: { id: BootstrapMethod; name: string; description: string; category: 'standard' | 'bloomberg' | 'quantlib' }[] = [
   // Standard Methods
@@ -77,12 +72,24 @@ function getDefaultCurveConfig(currencyConfig: CurrencyConfig): CurveConfig {
   };
 }
 
+// Get available futures indices for a currency
+function getFuturesIndicesForCurrency(currency: string) {
+  return RATE_INDICES.filter(r => r.currency === currency);
+}
+
+// Get available IRS indices for a currency (or all if none specific)
+function getIRSIndicesForCurrency(currency: string) {
+  const specific = IRS_INDICES.filter(i => i.currency === currency);
+  return specific.length > 0 ? specific : IRS_INDICES;
+}
+
 export function BootstrappingDashboard() {
   // Multi-curve mode
   const [curves, setCurves] = useState<CurveConfig[]>([
     getDefaultCurveConfig(CURRENCY_CONFIGS[0]), // EUR by default
   ]);
   const [comparisonMode, setComparisonMode] = useState(false);
+  const [isLoadingAll, setIsLoadingAll] = useState(false);
 
   // Method selection (shared across curves)
   const [selectedMethods, setSelectedMethods] = useState<BootstrapMethod[]>(["linear", "cubic_spline"]);
@@ -90,16 +97,52 @@ export function BootstrappingDashboard() {
   // Active curve for single-curve view
   const activeCurve = curves[0];
 
-  // Fetch data for all curves
-  const futuresQueries = curves.map(c => useRateData(c.futuresIndex));
-  const irsQueries = curves.map(c => useIRSData(c.irsCurrency));
+  // Fetch data for all unique indices used
+  const uniqueFuturesIndices = [...new Set(curves.map(c => c.futuresIndex))];
+  const uniqueIRSCurrencies = [...new Set(curves.map(c => c.irsCurrency))];
+
+  // Map queries by index for easy lookup
+  const futuresQueriesMap = new Map<string, ReturnType<typeof useRateData>>();
+  const irsQueriesMap = new Map<string, ReturnType<typeof useIRSData>>();
+
+  // Create queries for each unique index (hooks must be called unconditionally)
+  const futuresQuery0 = useRateData(uniqueFuturesIndices[0] || "");
+  const futuresQuery1 = useRateData(uniqueFuturesIndices[1] || "");
+  const futuresQuery2 = useRateData(uniqueFuturesIndices[2] || "");
+  const futuresQuery3 = useRateData(uniqueFuturesIndices[3] || "");
+  const futuresQuery4 = useRateData(uniqueFuturesIndices[4] || "");
+  
+  const irsQuery0 = useIRSData(uniqueIRSCurrencies[0] || "");
+  const irsQuery1 = useIRSData(uniqueIRSCurrencies[1] || "");
+  const irsQuery2 = useIRSData(uniqueIRSCurrencies[2] || "");
+  const irsQuery3 = useIRSData(uniqueIRSCurrencies[3] || "");
+  const irsQuery4 = useIRSData(uniqueIRSCurrencies[4] || "");
+
+  // Populate maps
+  if (uniqueFuturesIndices[0]) futuresQueriesMap.set(uniqueFuturesIndices[0], futuresQuery0);
+  if (uniqueFuturesIndices[1]) futuresQueriesMap.set(uniqueFuturesIndices[1], futuresQuery1);
+  if (uniqueFuturesIndices[2]) futuresQueriesMap.set(uniqueFuturesIndices[2], futuresQuery2);
+  if (uniqueFuturesIndices[3]) futuresQueriesMap.set(uniqueFuturesIndices[3], futuresQuery3);
+  if (uniqueFuturesIndices[4]) futuresQueriesMap.set(uniqueFuturesIndices[4], futuresQuery4);
+  
+  if (uniqueIRSCurrencies[0]) irsQueriesMap.set(uniqueIRSCurrencies[0], irsQuery0);
+  if (uniqueIRSCurrencies[1]) irsQueriesMap.set(uniqueIRSCurrencies[1], irsQuery1);
+  if (uniqueIRSCurrencies[2]) irsQueriesMap.set(uniqueIRSCurrencies[2], irsQuery2);
+  if (uniqueIRSCurrencies[3]) irsQueriesMap.set(uniqueIRSCurrencies[3], irsQuery3);
+  if (uniqueIRSCurrencies[4]) irsQueriesMap.set(uniqueIRSCurrencies[4], irsQuery4);
+
+  // Get query for a specific curve
+  const getFuturesQuery = (index: string) => futuresQueriesMap.get(index) || futuresQuery0;
+  const getIRSQuery = (currency: string) => irsQueriesMap.get(currency) || irsQuery0;
 
   // Build results for each curve
   const curveResults = useMemo(() => {
-    return curves.map((curve, idx) => {
-      const futuresData = futuresQueries[idx].data;
-      const irsData = irsQueries[idx].data;
-      const isLoading = futuresQueries[idx].isLoading || irsQueries[idx].isLoading;
+    return curves.map((curve) => {
+      const futuresQuery = getFuturesQuery(curve.futuresIndex);
+      const irsQuery = getIRSQuery(curve.irsCurrency);
+      const futuresData = futuresQuery.data;
+      const irsData = irsQuery.data;
+      const isLoading = futuresQuery.isLoading || irsQuery.isLoading;
 
       const swapPoints: BootstrapPoint[] = [];
       const futuresPoints: BootstrapPoint[] = [];
@@ -155,7 +198,7 @@ export function BootstrappingDashboard() {
         basisConvention: getBasisConvention(curve.currency),
       };
     });
-  }, [curves, futuresQueries, irsQueries, selectedMethods]);
+  }, [curves, futuresQueriesMap, irsQueriesMap, selectedMethods]);
 
   const addCurve = () => {
     // Find a currency not yet used
@@ -224,8 +267,22 @@ export function BootstrappingDashboard() {
     clearAllCache();
     toast.success("Cache vidé - les données seront rafraîchies");
     // Trigger refresh for all queries
-    futuresQueries.forEach(q => q.refetch());
-    irsQueries.forEach(q => q.refetch());
+    Array.from(futuresQueriesMap.values()).forEach(q => q.refetch());
+    Array.from(irsQueriesMap.values()).forEach(q => q.refetch());
+  };
+
+  const handleLoadAllData = async () => {
+    setIsLoadingAll(true);
+    toast.info("Chargement de toutes les données...");
+    
+    const allRefetches = [
+      ...Array.from(futuresQueriesMap.values()).map(q => q.refetch()),
+      ...Array.from(irsQueriesMap.values()).map(q => q.refetch()),
+    ];
+    
+    await Promise.all(allRefetches);
+    setIsLoadingAll(false);
+    toast.success("Toutes les données sont chargées");
   };
 
   const isLoading = curveResults.some(r => r.isLoading);
@@ -252,6 +309,15 @@ export function BootstrappingDashboard() {
             Configuration du Bootstrapping
           </CardTitle>
           <div className="flex items-center gap-2">
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleLoadAllData}
+              disabled={isLoadingAll}
+            >
+              {isLoadingAll ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Database className="w-4 h-4 mr-2" />}
+              {isLoadingAll ? "Chargement..." : "Charger Tout"}
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -337,9 +403,10 @@ export function BootstrappingDashboard() {
                         </p>
                       )}
 
-                      {/* Data Sources */}
-                      <div className="space-y-2 pt-2 border-t">
-                        <div className="flex items-center justify-between">
+                      {/* Data Sources with dropdowns */}
+                      <div className="space-y-3 pt-2 border-t">
+                        {/* Futures Index Selector */}
+                        <div className="space-y-1">
                           <div className="flex items-center space-x-2">
                             <Checkbox
                               id={`futures-${curve.id}`}
@@ -348,10 +415,23 @@ export function BootstrappingDashboard() {
                                 updateCurve(curve.id, { useFutures: checked === true })
                               }
                             />
-                            <Label htmlFor={`futures-${curve.id}`} className="text-sm">
-                              {futuresIndex?.name || curve.futuresIndex}
-                            </Label>
+                            <Label htmlFor={`futures-${curve.id}`} className="text-xs text-muted-foreground">Futures</Label>
                           </div>
+                          <Select
+                            value={curve.futuresIndex}
+                            onValueChange={(value) => updateCurve(curve.id, { futuresIndex: value })}
+                          >
+                            <SelectTrigger className="h-8 text-sm">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {RATE_INDICES.map((idx) => (
+                                <SelectItem key={idx.id} value={idx.id}>
+                                  {idx.name} ({idx.currency})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                           {futuresCacheAge && (
                             <span className="text-xs text-muted-foreground flex items-center gap-1">
                               <Clock className="w-3 h-3" />
@@ -360,7 +440,8 @@ export function BootstrappingDashboard() {
                           )}
                         </div>
 
-                        <div className="flex items-center justify-between">
+                        {/* IRS Currency Selector */}
+                        <div className="space-y-1">
                           <div className="flex items-center space-x-2">
                             <Checkbox
                               id={`irs-${curve.id}`}
@@ -369,10 +450,23 @@ export function BootstrappingDashboard() {
                                 updateCurve(curve.id, { useIRS: checked === true })
                               }
                             />
-                            <Label htmlFor={`irs-${curve.id}`} className="text-sm">
-                              {curve.irsCurrency.toUpperCase()} IRS
-                            </Label>
+                            <Label htmlFor={`irs-${curve.id}`} className="text-xs text-muted-foreground">IRS Swaps</Label>
                           </div>
+                          <Select
+                            value={curve.irsCurrency}
+                            onValueChange={(value) => updateCurve(curve.id, { irsCurrency: value })}
+                          >
+                            <SelectTrigger className="h-8 text-sm">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {IRS_INDICES.map((idx) => (
+                                <SelectItem key={idx.id} value={idx.id}>
+                                  {idx.name} ({idx.currency})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                           {irsCacheAge && (
                             <span className="text-xs text-muted-foreground flex items-center gap-1">
                               <Clock className="w-3 h-3" />
