@@ -31,7 +31,7 @@ import { Label } from "@/components/ui/label";
 import { DiscountFactorTable } from "./DiscountFactorTable";
 import { BootstrapCurveChart } from "./BootstrapCurveChart";
 import { BootstrappingDocumentation } from "./BootstrappingDocumentation";
-import { Download, Calculator, TrendingUp, Settings2, RefreshCw, Plus, X, Clock, Layers, Database, BookOpen, Loader2 } from "lucide-react";
+import { Download, Calculator, TrendingUp, Settings2, RefreshCw, Plus, X, Clock, Layers, BookOpen } from "lucide-react";
 import { toast } from "sonner";
 
 const BOOTSTRAP_METHODS: { id: BootstrapMethod; name: string; description: string; category: 'standard' | 'bloomberg' | 'quantlib' }[] = [
@@ -89,7 +89,6 @@ export function BootstrappingDashboard() {
     getDefaultCurveConfig(CURRENCY_CONFIGS[0]), // EUR by default
   ]);
   const [comparisonMode, setComparisonMode] = useState(false);
-  const [isLoadingAll, setIsLoadingAll] = useState(false);
 
   // Method selection (shared across curves)
   const [selectedMethods, setSelectedMethods] = useState<BootstrapMethod[]>(["linear", "cubic_spline"]);
@@ -271,20 +270,6 @@ export function BootstrappingDashboard() {
     Array.from(irsQueriesMap.values()).forEach(q => q.refetch());
   };
 
-  const handleLoadAllData = async () => {
-    setIsLoadingAll(true);
-    toast.info("Chargement de toutes les données...");
-    
-    const allRefetches = [
-      ...Array.from(futuresQueriesMap.values()).map(q => q.refetch()),
-      ...Array.from(irsQueriesMap.values()).map(q => q.refetch()),
-    ];
-    
-    await Promise.all(allRefetches);
-    setIsLoadingAll(false);
-    toast.success("Toutes les données sont chargées");
-  };
-
   const isLoading = curveResults.some(r => r.isLoading);
   const activeResult = curveResults[0];
 
@@ -309,15 +294,6 @@ export function BootstrappingDashboard() {
             Configuration du Bootstrapping
           </CardTitle>
           <div className="flex items-center gap-2">
-            <Button
-              variant="default"
-              size="sm"
-              onClick={handleLoadAllData}
-              disabled={isLoadingAll}
-            >
-              {isLoadingAll ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Database className="w-4 h-4 mr-2" />}
-              {isLoadingAll ? "Chargement..." : "Charger Tout"}
-            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -605,6 +581,7 @@ export function BootstrappingDashboard() {
             {comparisonMode && <TabsTrigger value="comparison">Comparaison</TabsTrigger>}
             <TabsTrigger value="discount_factors">Discount Factors</TabsTrigger>
             <TabsTrigger value="input_data">Données d'entrée</TabsTrigger>
+            <TabsTrigger value="documentation">Documentation</TabsTrigger>
           </TabsList>
 
           <TabsContent value="chart">
@@ -738,6 +715,10 @@ export function BootstrappingDashboard() {
                 </CardContent>
               </Card>
             ))}
+          </TabsContent>
+
+          <TabsContent value="documentation">
+            <BootstrappingDocumentation />
           </TabsContent>
         </Tabs>
       )}

@@ -1,4 +1,4 @@
-import { RefreshCw, Clock } from "lucide-react";
+import { RefreshCw, Clock, Database, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -6,9 +6,17 @@ interface DashboardHeaderProps {
   lastUpdated?: string;
   onRefresh: () => void;
   isRefreshing?: boolean;
+  onLoadAll?: () => void;
+  isLoadingAll?: boolean;
 }
 
-export function DashboardHeader({ lastUpdated, onRefresh, isRefreshing }: DashboardHeaderProps) {
+export function DashboardHeader({ 
+  lastUpdated, 
+  onRefresh, 
+  isRefreshing,
+  onLoadAll,
+  isLoadingAll 
+}: DashboardHeaderProps) {
   const formattedTime = lastUpdated
     ? new Date(lastUpdated).toLocaleTimeString("fr-FR", {
         hour: "2-digit",
@@ -49,6 +57,23 @@ export function DashboardHeader({ lastUpdated, onRefresh, isRefreshing }: Dashbo
                   <div className="text-xs">{formattedDate}</div>
                 </div>
               </div>
+            )}
+
+            {onLoadAll && (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={onLoadAll}
+                disabled={isLoadingAll}
+                className="gap-2"
+              >
+                {isLoadingAll ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Database className="w-4 h-4" />
+                )}
+                {isLoadingAll ? "Chargement..." : "Charger Tout"}
+              </Button>
             )}
 
             <Button
