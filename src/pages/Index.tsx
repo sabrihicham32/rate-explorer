@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { useRateData } from "@/hooks/useRateData";
 import { RATE_INDICES, FuturesData } from "@/lib/rateIndices";
+import { IRS_INDICES } from "@/lib/irsIndices";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import { RateCard } from "@/components/RateCard";
 import { EditableRateTable } from "@/components/EditableRateTable";
@@ -11,12 +12,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, LineChart, Table, ArrowLeftRight, Calculator } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
+import { fetchRateData } from "@/lib/api/rates";
+import { fetchIRSRates } from "@/lib/api/irs";
 
 const Index = () => {
   const [selectedIndex, setSelectedIndex] = useState(RATE_INDICES[0].id);
   const [localData, setLocalData] = useState<FuturesData[] | null>(null);
   const [activeTab, setActiveTab] = useState<"table" | "chart">("table");
   const [mainView, setMainView] = useState<"futures" | "irs" | "bootstrap">("futures");
+  const [isLoadingAll, setIsLoadingAll] = useState(false);
   const queryClient = useQueryClient();
   
   const { data: rateData, isLoading, isFetching, error } = useRateData(selectedIndex);
@@ -24,6 +29,34 @@ const Index = () => {
   const handleRefresh = () => {
     setLocalData(null); // Reset local edits on refresh
     queryClient.invalidateQueries({ queryKey: ["rateData", selectedIndex] });
+  };
+
+  const handleLoadAll = async () => {
+    setIsLoadingAll(true);
+    toast.info("Chargement de toutes les données...");
+    
+    try {
+      // Fetch all rate futures in parallel
+      const ratePromises = RATE_INDICES.map(idx => 
+        fetchRateData(idx.id, true).then(() => {
+          queryClient.invalidateQueries({ queryKey: ["rateData", idx.id] });
+        })
+      );
+      
+      // Fetch all IRS data in parallel
+      const irsPromises = IRS_INDICES.map(idx => 
+        fetchIRSRates(idx.currency, true).then(() => {
+          queryClient.invalidateQueries({ queryKey: ["irsData", idx.currency] });
+        })
+      );
+      
+      await Promise.all([...ratePromises, ...irsPromises]);
+      toast.success("Toutes les données sont chargées");
+    } catch (error) {
+      toast.error("Erreur lors du chargement des données");
+    } finally {
+      setIsLoadingAll(false);
+    }
   };
 
   const handleDataChange = useCallback((newData: FuturesData[]) => {
@@ -52,6 +85,8 @@ const Index = () => {
         lastUpdated={rateData?.lastUpdated}
         onRefresh={handleRefresh}
         isRefreshing={isFetching}
+        onLoadAll={handleLoadAll}
+        isLoadingAll={isLoadingAll}
       />
 
       <main className="container mx-auto px-4 py-6">
