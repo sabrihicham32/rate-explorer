@@ -11,6 +11,7 @@ export function useRateData(index: string) {
     staleTime: 1000 * 60 * 30, // 30 minutes (matches cache duration)
     refetchInterval: false, // Don't auto-refetch, use cache
     refetchOnWindowFocus: false,
+    enabled: !!index, // Don't fetch if index is empty
   });
 
   const forceRefresh = useCallback(() => {
