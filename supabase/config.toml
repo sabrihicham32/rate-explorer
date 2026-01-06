@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.scrape-irs]
 verify_jwt = false
+
+[functions.scrape-bonds]
+verify_jwt = false
