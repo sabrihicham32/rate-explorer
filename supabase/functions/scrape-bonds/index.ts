@@ -124,93 +124,86 @@ function parseMainTable(markdown: string): CountryBondData[] {
   const results: CountryBondData[] = [];
   const lines = markdown.split('\n');
   
-  let inTable = false;
-  
   for (const line of lines) {
-    // Look for table rows with country data
-    if (line.includes('|') && !line.includes('---')) {
-      const cells = line.split('|').map(c => c.trim()).filter(c => c);
+    // Look for table rows with country data - they contain links to country pages
+    if (!line.includes('|')) continue;
+    if (line.includes('---')) continue;
+    
+    // Match country links like [Switzerland](https://www.worldgovernmentbonds.com/country/switzerland/)
+    const countryMatch = line.match(/\[([^\]]+)\]\(https:\/\/www\.worldgovernmentbonds\.com\/country\/([^\/]+)\/\)/);
+    if (!countryMatch) continue;
+    
+    const countryName = countryMatch[1].replace(/\s*\(\*\)\s*$/, '').trim(); // Remove (*) suffix
+    const countrySlug = countryMatch[2];
+    const currency = COUNTRY_CURRENCIES[countrySlug] || 'USD';
+    
+    // Extract rating - match [AAA](url) or [AA+](url) or standalone ratings
+    const ratingMatch = line.match(/\[([A-D]{1,3}[+-]?)\]\(https:\/\/www\.worldgovernmentbonds\.com\/credit-rating\//);
+    const rating = ratingMatch ? ratingMatch[1] : '';
+    
+    // Extract 10Y yield - match [0.273%](url) or standalone percentage
+    const yieldMatch = line.match(/\[(\d+\.?\d*%)\]\(https:\/\/www\.worldgovernmentbonds\.com\/bond-historical-data\//);
+    const standaloneYieldMatch = line.match(/\|\s*(\d+\.?\d*)%\s*\|/);
+    const yield10Y = yieldMatch 
+      ? parsePercentage(yieldMatch[1]) 
+      : (standaloneYieldMatch ? parsePercentage(standaloneYieldMatch[1] + '%') : null);
+    
+    // Extract bank rate - appears after yield, before spreads
+    const cells = line.split('|').map(c => c.trim());
+    let bankRate: number | null = null;
+    let spreadVsBund: number | null = null;
+    let spreadVsTNote: number | null = null;
+    let spreadVsBankRate: number | null = null;
+    
+    let foundYield = false;
+    let foundBankRate = false;
+    let spreadCount = 0;
+    
+    for (const cell of cells) {
+      // Skip empty cells
+      if (!cell) continue;
       
-      // Skip header rows
-      if (cells.some(c => c.toLowerCase().includes('country') || c.toLowerCase().includes('rating') || c.toLowerCase().includes('s&p'))) {
-        inTable = true;
-        continue;
+      // Extract text from markdown links
+      const linkText = cell.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+      
+      // Check for percentage (yield or bank rate)
+      const percentMatch = linkText.match(/(\d+\.?\d*)%/);
+      if (percentMatch && !linkText.includes('bp')) {
+        if (!foundYield) {
+          foundYield = true;
+        } else if (!foundBankRate) {
+          bankRate = parseFloat(percentMatch[1]);
+          foundBankRate = true;
+        }
       }
       
-      if (inTable && cells.length >= 5) {
-        // Try to extract country name - usually first non-empty meaningful cell
-        let countryName = '';
-        let startIdx = 0;
-        
-        for (let i = 0; i < cells.length; i++) {
-          const cell = cells[i];
-          // Skip flag emojis, images, or very short cells
-          if (cell.length > 2 && !cell.startsWith('!') && !cell.startsWith('[') && 
-              !/^[A-Z]{2,4}[+-]?$/.test(cell) && !/^\d/.test(cell)) {
-            countryName = cell.replace(/\[.*?\]/g, '').replace(/\(.*?\)/g, '').trim();
-            startIdx = i + 1;
-            break;
-          }
+      // Check for basis points (spreads)
+      const bpMatch = linkText.match(/(-?\d+\.?\d*)\s*bp/i);
+      if (bpMatch) {
+        const bpValue = parseFloat(bpMatch[1]);
+        if (spreadCount === 0) {
+          spreadVsBund = bpValue;
+        } else if (spreadCount === 1) {
+          spreadVsTNote = bpValue;
+        } else if (spreadCount === 2) {
+          spreadVsBankRate = bpValue;
         }
-        
-        if (!countryName) continue;
-        
-        const slug = slugify(countryName);
-        const currency = COUNTRY_CURRENCIES[slug] || 'USD';
-        
-        // Parse remaining cells
-        const remainingCells = cells.slice(startIdx);
-        
-        let rating = '';
-        let yield10Y: number | null = null;
-        let bankRate: number | null = null;
-        let spreadVsBund: number | null = null;
-        let spreadVsTNote: number | null = null;
-        let spreadVsBankRate: number | null = null;
-        
-        for (const cell of remainingCells) {
-          const trimmed = cell.trim();
-          
-          // Rating (AAA, AA+, A-, BBB, etc.)
-          if (/^[A-D]{1,3}[+-]?$/.test(trimmed) || trimmed === 'NR') {
-            rating = trimmed;
-          }
-          // Percentage values (yield, bank rate)
-          else if (trimmed.includes('%')) {
-            const val = parsePercentage(trimmed);
-            if (yield10Y === null) {
-              yield10Y = val;
-            } else if (bankRate === null) {
-              bankRate = val;
-            }
-          }
-          // Basis points (spreads)
-          else if (trimmed.toLowerCase().includes('bp')) {
-            const val = parseBasisPoints(trimmed);
-            if (spreadVsBund === null) {
-              spreadVsBund = val;
-            } else if (spreadVsTNote === null) {
-              spreadVsTNote = val;
-            } else if (spreadVsBankRate === null) {
-              spreadVsBankRate = val;
-            }
-          }
-        }
-        
-        if (countryName && (yield10Y !== null || rating)) {
-          results.push({
-            country: countryName,
-            countrySlug: slug,
-            currency,
-            rating,
-            yield10Y,
-            bankRate,
-            spreadVsBund,
-            spreadVsTNote,
-            spreadVsBankRate,
-          });
-        }
+        spreadCount++;
       }
+    }
+    
+    if (countryName && yield10Y !== null) {
+      results.push({
+        country: countryName,
+        countrySlug,
+        currency,
+        rating,
+        yield10Y,
+        bankRate,
+        spreadVsBund,
+        spreadVsTNote,
+        spreadVsBankRate,
+      });
     }
   }
   
@@ -221,119 +214,100 @@ function parseCountryYieldTable(markdown: string): BondYieldData[] {
   const results: BondYieldData[] = [];
   const lines = markdown.split('\n');
   
-  // Find lines that look like maturity data
-  const maturityPatterns = [
-    /(\d+)\s*(months?|m)\b/i,
-    /(\d+)\s*(years?|y)\b/i,
-  ];
-  
   for (const line of lines) {
     if (!line.includes('|')) continue;
+    if (line.includes('---')) continue;
     
-    const cells = line.split('|').map(c => c.trim()).filter(c => c);
-    if (cells.length < 3) continue;
+    // Match maturity links like [3 months](url) or [10 years](url)
+    const maturityMatch = line.match(/\[(\d+)\s*(months?|years?)\]\(https:\/\/www\.worldgovernmentbonds\.com\/bond-historical-data\//i);
+    if (!maturityMatch) continue;
     
-    // Look for maturity in first cells
-    let maturity = '';
-    let maturityYears = 0;
-    let startIdx = 0;
+    const maturityValue = parseInt(maturityMatch[1]);
+    const maturityUnit = maturityMatch[2].toLowerCase();
+    const isMonths = maturityUnit.startsWith('month');
     
-    for (let i = 0; i < Math.min(3, cells.length); i++) {
-      const cell = cells[i].toLowerCase();
-      
-      const monthMatch = cell.match(/(\d+)\s*(months?|m)\b/i);
-      const yearMatch = cell.match(/(\d+)\s*(years?|y)\b/i);
-      
-      if (monthMatch) {
-        const months = parseInt(monthMatch[1]);
-        maturityYears = months / 12;
-        maturity = `${months} months`;
-        startIdx = i + 1;
-        break;
-      } else if (yearMatch) {
-        const years = parseInt(yearMatch[1]);
-        maturityYears = years;
-        maturity = `${years} years`;
-        startIdx = i + 1;
-        break;
-      }
-    }
+    const maturity = `${maturityValue} ${maturityUnit}`;
+    const maturityYears = isMonths ? maturityValue / 12 : maturityValue;
     
-    if (!maturity || maturityYears === 0) continue;
+    // Extract all the data from the row
+    // Format: | | [3 months](url) | 2.291% | -11.5 bp | +7.1 bp | -20.9 bp | | 99.44 | +0.03 % | -0.01 % | +0.06 % | 1.005 | 06 Jan |
     
-    // Parse remaining data
-    const remainingCells = cells.slice(startIdx);
+    const cells = line.split('|').map(c => c.trim());
     
     let yieldVal: number | null = null;
     let chg1M: number | null = null;
     let chg6M: number | null = null;
     let chg12M: number | null = null;
     let price: number | null = null;
-    let priceChg1M: number | null = null;
-    let priceChg6M: number | null = null;
-    let priceChg12M: number | null = null;
     let capitalGrowth: number | null = null;
     let lastUpdate = '';
     
-    let percentCount = 0;
     let bpCount = 0;
-    let priceCount = 0;
+    let foundYield = false;
+    let foundPrice = false;
     
-    for (const cell of remainingCells) {
-      const trimmed = cell.trim();
+    for (const cell of cells) {
+      if (!cell) continue;
       
-      // Date pattern
-      if (/\d{1,2}\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i.test(trimmed)) {
-        lastUpdate = trimmed;
+      // Skip maturity link cell
+      if (cell.includes('worldgovernmentbonds.com/bond-historical-data')) continue;
+      
+      // Date pattern (06 Jan)
+      const dateMatch = cell.match(/(\d{1,2})\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i);
+      if (dateMatch) {
+        lastUpdate = cell;
         continue;
       }
       
-      // Percentage (yield)
-      if (trimmed.includes('%') && !trimmed.toLowerCase().includes('bp')) {
-        const val = parsePercentage(trimmed);
-        if (yieldVal === null) {
-          yieldVal = val;
-        }
+      // Yield percentage (e.g., 2.291%)
+      const yieldMatch = cell.match(/^(\d+\.?\d*)%$/);
+      if (yieldMatch && !foundYield) {
+        yieldVal = parseFloat(yieldMatch[1]);
+        foundYield = true;
         continue;
       }
       
-      // Basis points changes
-      if (trimmed.toLowerCase().includes('bp')) {
-        const val = parseBasisPoints(trimmed);
-        if (bpCount === 0) chg1M = val;
-        else if (bpCount === 1) chg6M = val;
-        else if (bpCount === 2) chg12M = val;
+      // Basis points changes (e.g., -11.5 bp, +7.1 bp)
+      const bpMatch = cell.match(/([+-]?\d+\.?\d*)\s*bp/i);
+      if (bpMatch) {
+        const bpValue = parseFloat(bpMatch[1]);
+        if (bpCount === 0) chg1M = bpValue;
+        else if (bpCount === 1) chg6M = bpValue;
+        else if (bpCount === 2) chg12M = bpValue;
         bpCount++;
         continue;
       }
       
-      // Pure numbers (prices or growth)
-      const numVal = parseFloat(trimmed.replace(/[,+]/g, ''));
-      if (!isNaN(numVal)) {
-        if (numVal > 50 && numVal < 150) {
-          // Likely a price
-          if (price === null) price = numVal;
+      // Price or capital growth (pure numbers)
+      const numMatch = cell.match(/^(\d+\.?\d*)$/);
+      if (numMatch) {
+        const numVal = parseFloat(numMatch[1]);
+        if (!foundPrice && numVal >= 50 && numVal <= 110) {
+          price = numVal;
+          foundPrice = true;
         } else if (numVal > 0 && numVal < 10) {
-          // Likely capital growth
           capitalGrowth = numVal;
         }
+        continue;
       }
     }
     
-    results.push({
-      maturity,
-      maturityYears,
-      yield: yieldVal,
-      chg1M,
-      chg6M,
-      chg12M,
-      price,
-      priceChg1M,
-      priceChg6M,
-      priceChg12M,
-      capitalGrowth,
-      lastUpdate,
-    });
+    if (yieldVal !== null) {
+      results.push({
+        maturity,
+        maturityYears,
+        yield: yieldVal,
+        chg1M,
+        chg6M,
+        chg12M,
+        price,
+        priceChg1M: null,
+        priceChg6M: null,
+        priceChg12M: null,
+        capitalGrowth,
+        lastUpdate,
+      });
+    }
   }
   
   // Sort by maturity
