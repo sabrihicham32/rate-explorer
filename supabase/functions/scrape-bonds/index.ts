@@ -211,16 +211,32 @@ function parseMainTable(markdown: string): CountryBondData[] {
 }
 
 function parseCountryYieldTable(markdown: string): BondYieldData[] {
-  const results: BondYieldData[] = [];
+  const tempResults: BondYieldData[] = [];
   const lines = markdown.split('\n');
   
+  // Find only the first yield table (avoid coupon tables, etc.)
+  let inYieldTable = false;
+  let tableStarted = false;
+  
   for (const line of lines) {
-    if (!line.includes('|')) continue;
-    if (line.includes('---')) continue;
+    if (!line.includes('|')) {
+      if (tableStarted) inYieldTable = false;
+      continue;
+    }
+    if (line.includes('---')) {
+      tableStarted = true;
+      continue;
+    }
     
     // Match maturity links like [3 months](url) or [10 years](url)
     const maturityMatch = line.match(/\[(\d+)\s*(months?|years?)\]\(https:\/\/www\.worldgovernmentbonds\.com\/bond-historical-data\//i);
     if (!maturityMatch) continue;
+    
+    // Check if this line has yield data (percentage) - skip coupon-only rows
+    const hasYield = /\|\s*-?\d+\.?\d*%\s*\|/.test(line);
+    if (!hasYield) continue;
+    
+    inYieldTable = true;
     
     const maturityValue = parseInt(maturityMatch[1]);
     const maturityUnit = maturityMatch[2].toLowerCase();
@@ -230,8 +246,6 @@ function parseCountryYieldTable(markdown: string): BondYieldData[] {
     const maturityYears = isMonths ? maturityValue / 12 : maturityValue;
     
     // Extract all the data from the row
-    // Format: | | [3 months](url) | 2.291% | -11.5 bp | +7.1 bp | -20.9 bp | | 99.44 | +0.03 % | -0.01 % | +0.06 % | 1.005 | 06 Jan |
-    
     const cells = line.split('|').map(c => c.trim());
     
     let yieldVal: number | null = null;
@@ -259,8 +273,8 @@ function parseCountryYieldTable(markdown: string): BondYieldData[] {
         continue;
       }
       
-      // Yield percentage (e.g., 2.291%)
-      const yieldMatch = cell.match(/^(\d+\.?\d*)%$/);
+      // Yield percentage (e.g., 2.291% or -0.170%)
+      const yieldMatch = cell.match(/^(-?\d+\.?\d*)%$/);
       if (yieldMatch && !foundYield) {
         yieldVal = parseFloat(yieldMatch[1]);
         foundYield = true;
@@ -282,7 +296,7 @@ function parseCountryYieldTable(markdown: string): BondYieldData[] {
       const numMatch = cell.match(/^(\d+\.?\d*)$/);
       if (numMatch) {
         const numVal = parseFloat(numMatch[1]);
-        if (!foundPrice && numVal >= 50 && numVal <= 110) {
+        if (!foundPrice && numVal >= 50 && numVal <= 150) {
           price = numVal;
           foundPrice = true;
         } else if (numVal > 0 && numVal < 10) {
@@ -293,7 +307,7 @@ function parseCountryYieldTable(markdown: string): BondYieldData[] {
     }
     
     if (yieldVal !== null) {
-      results.push({
+      tempResults.push({
         maturity,
         maturityYears,
         yield: yieldVal,
@@ -307,6 +321,16 @@ function parseCountryYieldTable(markdown: string): BondYieldData[] {
         capitalGrowth,
         lastUpdate,
       });
+    }
+  }
+  
+  // Deduplicate by maturityYears - keep only the first entry for each maturity
+  const seen = new Set<number>();
+  const results: BondYieldData[] = [];
+  for (const item of tempResults) {
+    if (!seen.has(item.maturityYears)) {
+      seen.add(item.maturityYears);
+      results.push(item);
     }
   }
   
