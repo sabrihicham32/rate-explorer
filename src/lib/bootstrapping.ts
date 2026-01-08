@@ -26,8 +26,8 @@ export interface BasisConvention {
 export interface BootstrapPoint {
   tenor: number; // in years
   rate: number;  // in decimal (e.g., 0.0425 for 4.25%)
-  source: 'futures' | 'swap';
-  priority: number; // 1 = swap (highest), 2 = futures
+  source: 'futures' | 'swap' | 'bond';
+  priority: number; // 1 = swap/bond (highest), 2 = futures
   adjusted?: boolean; // true if futures was adjusted
   originalRate?: number; // original rate before adjustment
 }
@@ -37,7 +37,7 @@ export interface DiscountFactor {
   df: number;
   zeroRate: number;
   forwardRate?: number;
-  source: 'swap' | 'futures' | 'interpolated';
+  source: 'swap' | 'futures' | 'interpolated' | 'bond';
 }
 
 export interface BootstrapResult {
@@ -1277,6 +1277,63 @@ export function bootstrapLegacy(
   const swaps = points.filter(p => p.source === 'swap');
   const futures = points.filter(p => p.source === 'futures');
   return bootstrap(swaps, futures, method, 'USD');
+}
+
+/**
+ * Bootstrap yield curve from government bonds only
+ * Uses bond yields as direct zero rate inputs
+ */
+export function bootstrapBonds(
+  bondPoints: BootstrapPoint[],
+  method: BootstrapMethod,
+  currency: string
+): BootstrapResult {
+  const basis = getBasisConvention(currency);
+  
+  // Convert bond yields to continuous rates
+  const points = bondPoints.map(p => ({
+    ...p,
+    rate: swapRateToContinuous(p.rate, p.tenor, basis),
+    priority: 1,
+    source: 'bond' as const,
+  }));
+  
+  // Remove duplicates
+  const uniquePoints = removeDuplicates(points);
+  
+  if (uniquePoints.length < 2) {
+    return {
+      method,
+      discountFactors: [],
+      curvePoints: [],
+      inputPoints: bondPoints,
+      adjustedPoints: [],
+      currency,
+      basisConvention: basis,
+    };
+  }
+  
+  // Use the same interpolation methods as for swaps/futures
+  switch (method) {
+    case 'linear':
+      return bootstrapLinear(uniquePoints, currency, basis);
+    case 'cubic_spline':
+      return bootstrapCubicSpline(uniquePoints, currency, basis);
+    case 'nelson_siegel':
+      return bootstrapNelsonSiegel(uniquePoints, currency, basis);
+    case 'bloomberg':
+      return bootstrapBloomberg(uniquePoints, currency, basis);
+    case 'quantlib_log_linear':
+      return bootstrapQuantLibLogLinear(uniquePoints, currency, basis);
+    case 'quantlib_log_cubic':
+      return bootstrapQuantLibLogCubic(uniquePoints, currency, basis);
+    case 'quantlib_linear_forward':
+      return bootstrapQuantLibLinearForward(uniquePoints, currency, basis);
+    case 'quantlib_monotonic_convex':
+      return bootstrapQuantLibMonotonicConvex(uniquePoints, currency, basis);
+    default:
+      return bootstrapLinear(uniquePoints, currency, basis);
+  }
 }
 
 // ============ Export Functions ============
