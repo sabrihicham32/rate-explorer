@@ -22,9 +22,10 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { DiscountFactorTable } from "./DiscountFactorTable";
 import { BootstrapCurveChart } from "./BootstrapCurveChart";
-import { Download, Calculator, TrendingUp, RefreshCw, Landmark } from "lucide-react";
+import { Download, Calculator, TrendingUp, RefreshCw, Landmark, LayoutGrid, FileText, Info } from "lucide-react";
 import { toast } from "sonner";
 
 const BOOTSTRAP_METHODS: { id: BootstrapMethod; name: string; description: string }[] = [
@@ -36,7 +37,19 @@ const BOOTSTRAP_METHODS: { id: BootstrapMethod; name: string; description: strin
   { id: "quantlib_log_cubic", name: "QL Log-Cubic", description: "Log(DF) cubique" },
 ];
 
+// Main currencies that have dedicated IRS/Futures bootstrapping
+const MAJOR_CURRENCIES = ["USD", "EUR", "GBP", "CHF", "JPY"];
+
+type ViewMode = "dashboard" | "detail";
+
+interface CurrencyGroup {
+  currency: string;
+  countries: CountryBondData[];
+}
+
 export function GovBondsBootstrapping() {
+  const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
+  const [selectedCurrency, setSelectedCurrency] = useState<string>("");
   const [selectedCountry, setSelectedCountry] = useState<string>("");
   const [selectedMethods, setSelectedMethods] = useState<BootstrapMethod[]>(["linear", "cubic_spline"]);
   
@@ -52,9 +65,53 @@ export function GovBondsBootstrapping() {
   
   // Get country info
   const countriesData = countriesQuery.data?.data || [];
+  
+  // Group countries by currency
+  const currencyGroups: CurrencyGroup[] = useMemo(() => {
+    const groups: Record<string, CountryBondData[]> = {};
+    countriesData.forEach(c => {
+      if (!groups[c.currency]) {
+        groups[c.currency] = [];
+      }
+      groups[c.currency].push(c);
+    });
+    
+    return Object.entries(groups)
+      .map(([currency, countries]) => ({ currency, countries }))
+      .sort((a, b) => {
+        // Sort major currencies first
+        const aIsMajor = MAJOR_CURRENCIES.includes(a.currency);
+        const bIsMajor = MAJOR_CURRENCIES.includes(b.currency);
+        if (aIsMajor && !bIsMajor) return -1;
+        if (!aIsMajor && bIsMajor) return 1;
+        return a.currency.localeCompare(b.currency);
+      });
+  }, [countriesData]);
+  
+  // Get unique currencies
+  const currencies = useMemo(() => 
+    [...new Set(countriesData.map(c => c.currency))].sort((a, b) => {
+      const aIsMajor = MAJOR_CURRENCIES.includes(a);
+      const bIsMajor = MAJOR_CURRENCIES.includes(b);
+      if (aIsMajor && !bIsMajor) return -1;
+      if (!aIsMajor && bIsMajor) return 1;
+      return a.localeCompare(b);
+    }), 
+  [countriesData]);
+  
+  // Filter countries by selected currency
+  const filteredCountries = useMemo(() => 
+    selectedCurrency 
+      ? countriesData.filter(c => c.currency === selectedCurrency)
+      : countriesData,
+  [countriesData, selectedCurrency]);
+  
   const selectedCountryData = countriesData.find(c => c.countrySlug === selectedCountry);
-  const currency = selectedCountryData?.currency || "USD";
+  const currency = selectedCountryData?.currency || selectedCurrency || "USD";
   const yieldsData = yieldsQuery.data?.data || [];
+  
+  // Check if this is a major currency
+  const isMajorCurrency = MAJOR_CURRENCIES.includes(currency);
   
   // Build bootstrap points from bond yields
   const bondPoints: BootstrapPoint[] = useMemo(() => {
@@ -64,7 +121,7 @@ export function GovBondsBootstrapping() {
       .filter(y => y.yield !== null && y.maturityYears > 0)
       .map(y => ({
         tenor: y.maturityYears,
-        rate: (y.yield as number) / 100, // Convert from percentage
+        rate: (y.yield as number) / 100,
         source: 'bond' as const,
         priority: 1,
       }));
@@ -108,8 +165,132 @@ export function GovBondsBootstrapping() {
     }
   };
   
+  const handleSelectCountry = (countrySlug: string) => {
+    setSelectedCountry(countrySlug);
+    setViewMode("detail");
+  };
+  
+  const handleBackToDashboard = () => {
+    setViewMode("dashboard");
+    setSelectedCountry("");
+  };
+  
   const isLoading = countriesQuery.isLoading || yieldsQuery.isLoading;
   
+  // Dashboard View - Overview by Currency
+  if (viewMode === "dashboard") {
+    return (
+      <div className="space-y-6">
+        {/* Header */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Landmark className="w-5 h-5" />
+              Bonds Curve - Vue Dashboard
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setViewMode("detail")}>
+                <FileText className="w-4 h-4 mr-2" />
+                Vue Détail
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleRefresh}>
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Rafraîchir
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {/* Currency Filter */}
+            <div className="mb-4">
+              <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">
+                Filtrer par Devise
+              </Label>
+              <Select value={selectedCurrency} onValueChange={setSelectedCurrency}>
+                <SelectTrigger className="w-full max-w-xs">
+                  <SelectValue placeholder="Toutes les devises" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Toutes les devises</SelectItem>
+                  {currencies.map((curr) => (
+                    <SelectItem key={curr} value={curr}>
+                      <div className="flex items-center gap-2">
+                        <span>{curr}</span>
+                        {MAJOR_CURRENCIES.includes(curr) && (
+                          <Badge variant="secondary" className="text-xs">IRS/Futures</Badge>
+                        )}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </CardContent>
+        </Card>
+        
+        {/* Currency Groups */}
+        {countriesQuery.isLoading || countriesQuery.isFetching ? (
+          <Card>
+            <CardContent className="py-12 text-center">
+              <RefreshCw className="w-12 h-12 mx-auto mb-4 text-muted-foreground animate-spin" />
+              <p className="text-muted-foreground">Chargement des données...</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {currencyGroups
+              .filter(g => !selectedCurrency || g.currency === selectedCurrency)
+              .map(({ currency: curr, countries }) => (
+                <Card key={curr} className="hover:border-primary/50 transition-colors">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="default" className="text-lg px-3">{curr}</Badge>
+                        <span className="text-sm text-muted-foreground">
+                          {countries.length} pays
+                        </span>
+                      </div>
+                      {MAJOR_CURRENCIES.includes(curr) && (
+                        <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-600 border-amber-500/30">
+                          Préférer IRS/Futures
+                        </Badge>
+                      )}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-2">
+                      {countries.slice(0, 5).map(c => (
+                        <div 
+                          key={c.countrySlug}
+                          className="flex items-center justify-between p-2 rounded-lg hover:bg-muted/50 cursor-pointer transition-colors"
+                          onClick={() => handleSelectCountry(c.countrySlug)}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-sm">{c.country}</span>
+                            {c.rating && (
+                              <Badge variant="secondary" className="text-xs">{c.rating}</Badge>
+                            )}
+                          </div>
+                          <span className="text-sm font-mono">
+                            {c.yield10Y !== null ? `${c.yield10Y.toFixed(2)}%` : '-'}
+                          </span>
+                        </div>
+                      ))}
+                      {countries.length > 5 && (
+                        <div className="text-xs text-muted-foreground text-center pt-2">
+                          +{countries.length - 5} autres pays
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+  
+  // Detail View - Single Country Bootstrapping
   return (
     <div className="space-y-6">
       {/* Configuration */}
@@ -119,52 +300,103 @@ export function GovBondsBootstrapping() {
             <Landmark className="w-5 h-5" />
             Bootstrapping - Obligations Gouvernementales
           </CardTitle>
-          <Button variant="outline" size="sm" onClick={handleRefresh}>
-            <RefreshCw className="w-4 h-4 mr-2" />
-            Rafraîchir
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={handleBackToDashboard}>
+              <LayoutGrid className="w-4 h-4 mr-2" />
+              Vue Dashboard
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleRefresh}>
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Rafraîchir
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Country Selection */}
-          <div className="space-y-3">
-            <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-              Sélection du Pays
-            </Label>
-            <Select value={selectedCountry} onValueChange={setSelectedCountry}>
-              <SelectTrigger className="w-full max-w-md">
-                <SelectValue placeholder="Choisir un pays..." />
-              </SelectTrigger>
-              <SelectContent>
-                {countriesData.map((country) => (
-                  <SelectItem key={country.countrySlug} value={country.countrySlug}>
-                    <div className="flex items-center gap-2">
-                      <span>{country.country}</span>
-                      <Badge variant="outline" className="text-xs">
-                        {country.currency}
-                      </Badge>
-                      {country.rating && (
-                        <Badge variant="secondary" className="text-xs">
-                          {country.rating}
-                        </Badge>
-                      )}
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          {/* Currency Selection */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-3">
+              <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+                Devise
+              </Label>
+              <Select 
+                value={selectedCurrency} 
+                onValueChange={(v) => {
+                  setSelectedCurrency(v);
+                  setSelectedCountry(""); // Reset country when currency changes
+                }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Filtrer par devise..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Toutes les devises</SelectItem>
+                  {currencies.map((curr) => (
+                    <SelectItem key={curr} value={curr}>
+                      <div className="flex items-center gap-2">
+                        <span>{curr}</span>
+                        {MAJOR_CURRENCIES.includes(curr) && (
+                          <Badge variant="secondary" className="text-xs">IRS/Futures disponible</Badge>
+                        )}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             
-            {selectedCountryData && (
-              <div className="flex flex-wrap gap-2 text-sm">
-                <Badge variant="default">{selectedCountryData.currency}</Badge>
-                {selectedCountryData.rating && (
-                  <Badge variant="outline">Rating: {selectedCountryData.rating}</Badge>
-                )}
-                {selectedCountryData.yield10Y !== null && (
-                  <Badge variant="secondary">10Y: {selectedCountryData.yield10Y.toFixed(2)}%</Badge>
-                )}
-              </div>
-            )}
+            {/* Country Selection */}
+            <div className="space-y-3">
+              <Label className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
+                Pays
+              </Label>
+              <Select value={selectedCountry} onValueChange={setSelectedCountry}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Choisir un pays..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {filteredCountries.map((country) => (
+                    <SelectItem key={country.countrySlug} value={country.countrySlug}>
+                      <div className="flex items-center gap-2">
+                        <span>{country.country}</span>
+                        <Badge variant="outline" className="text-xs">
+                          {country.currency}
+                        </Badge>
+                        {country.rating && (
+                          <Badge variant="secondary" className="text-xs">
+                            {country.rating}
+                          </Badge>
+                        )}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
+          
+          {/* Warning for major currencies */}
+          {isMajorCurrency && selectedCountry && (
+            <Alert className="bg-amber-500/10 border-amber-500/30">
+              <Info className="h-4 w-4 text-amber-600" />
+              <AlertDescription className="text-amber-700 dark:text-amber-400">
+                Pour les courbes en <strong>{currency}</strong>, il est recommandé d'utiliser l'onglet 
+                <strong> "Bootstrapping"</strong> qui combine les futures et IRS pour une meilleure précision.
+                Les obligations gouvernementales servent principalement de référence.
+              </AlertDescription>
+            </Alert>
+          )}
+          
+          {selectedCountryData && (
+            <div className="flex flex-wrap gap-2 text-sm">
+              <Badge variant="default">{selectedCountryData.currency}</Badge>
+              {selectedCountryData.rating && (
+                <Badge variant="outline">Rating: {selectedCountryData.rating}</Badge>
+              )}
+              {selectedCountryData.yield10Y !== null && (
+                <Badge variant="secondary">10Y: {selectedCountryData.yield10Y.toFixed(2)}%</Badge>
+              )}
+            </div>
+          )}
           
           {/* Methods */}
           <div className="space-y-3">
