@@ -9,8 +9,9 @@ import { RateCurveChart } from "@/components/RateCurveChart";
 import { IRSDashboard } from "@/components/IRSDashboard";
 import { BootstrappingDashboard } from "@/components/BootstrappingDashboard";
 import { BondsDashboard } from "@/components/BondsDashboard";
+import { GovBondsBootstrapping } from "@/components/GovBondsBootstrapping";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, LineChart, Table, ArrowLeftRight, Calculator, Globe } from "lucide-react";
+import { AlertCircle, LineChart, Table, ArrowLeftRight, Calculator, Globe, Landmark } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
@@ -21,7 +22,7 @@ const Index = () => {
   const [selectedIndex, setSelectedIndex] = useState(RATE_INDICES[0].id);
   const [localData, setLocalData] = useState<FuturesData[] | null>(null);
   const [activeTab, setActiveTab] = useState<"table" | "chart">("table");
-  const [mainView, setMainView] = useState<"futures" | "irs" | "bootstrap" | "bonds">("futures");
+  const [mainView, setMainView] = useState<"futures" | "irs" | "bootstrap" | "bonds" | "bonds_bootstrap">("futures");
   const [isLoadingAll, setIsLoadingAll] = useState(false);
   const queryClient = useQueryClient();
   
@@ -93,8 +94,8 @@ const Index = () => {
       <main className="container mx-auto px-4 py-6">
         {/* Main View Selector */}
         <div className="mb-6">
-          <Tabs value={mainView} onValueChange={(v) => setMainView(v as "futures" | "irs" | "bootstrap" | "bonds")}>
-            <TabsList className="grid grid-cols-4 w-[600px]">
+          <Tabs value={mainView} onValueChange={(v) => setMainView(v as "futures" | "irs" | "bootstrap" | "bonds" | "bonds_bootstrap")}>
+            <TabsList className="grid grid-cols-5 w-[750px]">
               <TabsTrigger value="futures" className="flex items-center gap-2">
                 <LineChart className="w-4 h-4" />
                 Rate Futures
@@ -110,6 +111,10 @@ const Index = () => {
               <TabsTrigger value="bonds" className="flex items-center gap-2">
                 <Globe className="w-4 h-4" />
                 Gov Bonds
+              </TabsTrigger>
+              <TabsTrigger value="bonds_bootstrap" className="flex items-center gap-2">
+                <Landmark className="w-4 h-4" />
+                Bonds Curve
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -196,8 +201,10 @@ const Index = () => {
           <IRSDashboard />
         ) : mainView === "bootstrap" ? (
           <BootstrappingDashboard />
-        ) : (
+        ) : mainView === "bonds" ? (
           <BondsDashboard />
+        ) : (
+          <GovBondsBootstrapping />
         )}
 
         {/* Footer */}
